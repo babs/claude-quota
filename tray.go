@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"fyne.io/systray"
@@ -14,6 +15,7 @@ type App struct {
 	config Config
 	quota  *QuotaClient
 	quit   chan struct{} // closed on shutdown
+	uiMu   sync.Mutex    // serializes updateUI calls
 
 	// Menu items updated dynamically.
 	mFiveHour       *systray.MenuItem
@@ -143,11 +145,15 @@ func (a *App) updatedTicker() {
 }
 
 // updateUI refreshes the icon and menu items from current state.
+// Serialized via uiMu because pollLoop and eventLoop may call concurrently,
+// and the shared font.Face used during rendering is not goroutine-safe.
 func (a *App) updateUI() {
+	a.uiMu.Lock()
+	defer a.uiMu.Unlock()
 	state := a.quota.State()
 
 	// Update icon.
-	img := renderIcon(state, a.config.Thresholds, a.config.FontSize)
+	img := renderIcon(state, a.config.Thresholds, a.config.FontSize, a.config.IconSize, a.config.FontName, a.config.HaloSize)
 	iconData, err := iconToBytes(img)
 	if err != nil {
 		log.Printf("Icon encode error: %v", err)

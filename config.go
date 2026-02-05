@@ -12,6 +12,9 @@ import (
 type Config struct {
 	PollIntervalSeconds int        `json:"poll_interval_seconds"`
 	FontSize            float64    `json:"font_size"`
+	FontName            string     `json:"font_name"`
+	HaloSize            float64    `json:"halo_size"`
+	IconSize            int        `json:"icon_size"`
 	Thresholds          Thresholds `json:"thresholds"`
 }
 
@@ -35,7 +38,10 @@ func init() {
 func defaultConfig() Config {
 	return Config{
 		PollIntervalSeconds: 300,
-		FontSize:            18,
+		FontSize:            34,
+		FontName:            "bold",
+		HaloSize:            2,
+		IconSize:            64,
 		Thresholds: Thresholds{
 			Warning:  60,
 			Critical: 85,
@@ -65,6 +71,30 @@ func loadConfig() Config {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		log.Printf("Failed to parse config %s: %v", configPath, err)
 		return defaultConfig()
+	}
+
+	defaults := defaultConfig()
+	if cfg.IconSize <= 0 {
+		log.Printf("Invalid icon_size %d in config, using default %d", cfg.IconSize, defaults.IconSize)
+		cfg.IconSize = defaults.IconSize
+	}
+	if cfg.FontSize <= 0 {
+		log.Printf("Invalid font_size %v in config, using default %v", cfg.FontSize, defaults.FontSize)
+		cfg.FontSize = defaults.FontSize
+	}
+	if cfg.PollIntervalSeconds <= 0 {
+		log.Printf("Invalid poll_interval_seconds %d in config, using default %d", cfg.PollIntervalSeconds, defaults.PollIntervalSeconds)
+		cfg.PollIntervalSeconds = defaults.PollIntervalSeconds
+	}
+	if cfg.HaloSize < 0 {
+		log.Printf("Invalid halo_size %v in config, using default %v", cfg.HaloSize, defaults.HaloSize)
+		cfg.HaloSize = defaults.HaloSize
+	}
+	if cfg.FontName == "" || !ValidFontName(cfg.FontName) {
+		if cfg.FontName != "" {
+			log.Printf("Unknown font_name %q in config, using default %q", cfg.FontName, defaults.FontName)
+		}
+		cfg.FontName = defaults.FontName
 	}
 
 	return cfg

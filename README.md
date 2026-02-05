@@ -58,7 +58,8 @@ For a release build with version info and cross-compilation:
 ./claude-quota -update          # self-update to latest release
 ./claude-quota -poll-interval 60
 ./claude-quota -font-size 24
-./claude-quota -icon-size 128   # for HiDPI / large systray panels
+./claude-quota -font-name bitmap  # pixel-crisp bitmap font
+./claude-quota -icon-size 128     # for HiDPI / large systray panels
 ```
 
 Click the systray icon to see the quota breakdown with reset times.
@@ -70,7 +71,9 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
 ```json
 {
   "poll_interval_seconds": 300,
-  "font_size": 18,
+  "font_size": 34,
+  "font_name": "bold",
+  "halo_size": 2,
   "icon_size": 64,
   "thresholds": {
     "warning": 60,
@@ -79,13 +82,22 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
 }
 ```
 
-| Setting                 | Config key              | Env var                      | CLI flag         | Default |
-| ----------------------- | ----------------------- | ---------------------------- | ---------------- | ------- |
-| Poll interval (seconds) | `poll_interval_seconds` | `CLAUDE_QUOTA_POLL_INTERVAL` | `-poll-interval` | `300`   |
-| Font size (px)          | `font_size`             | `CLAUDE_QUOTA_FONT_SIZE`     | `-font-size`     | `18`    |
-| Icon size (px)          | `icon_size`             | `CLAUDE_QUOTA_ICON_SIZE`     | `-icon-size`     | `64`    |
-| Warning threshold (%)   | `thresholds.warning`    | —                            | —                | `60`    |
-| Critical threshold (%)  | `thresholds.critical`   | —                            | —                | `85`    |
+| Setting                 | Config key              | Env var                      | CLI flag         | Default  |
+| ----------------------- | ----------------------- | ---------------------------- | ---------------- | -------- |
+| Poll interval (seconds) | `poll_interval_seconds` | `CLAUDE_QUOTA_POLL_INTERVAL` | `-poll-interval` | `300`    |
+| Font size               | `font_size`             | `CLAUDE_QUOTA_FONT_SIZE`     | `-font-size`     | `34`     |
+| Font name               | `font_name`             | `CLAUDE_QUOTA_FONT_NAME`     | `-font-name`     | `"bold"` |
+| Halo size               | `halo_size`             | `CLAUDE_QUOTA_HALO_SIZE`     | `-halo-size`     | `2`      |
+| Icon size (px)          | `icon_size`             | `CLAUDE_QUOTA_ICON_SIZE`     | `-icon-size`     | `64`     |
+| Warning threshold (%)   | `thresholds.warning`    | —                            | —                | `60`     |
+| Critical threshold (%)  | `thresholds.critical`   | —                            | —                | `85`     |
+
+`font_size` and `halo_size` are relative to the base icon size (64px). They scale
+automatically with `icon_size` — e.g. at `icon_size: 128` the rendered font is 2x larger.
+
+Available font names: `bold` (default), `regular`, `mono`, `monobold`, `bitmap`.
+TTF fonts (`bold`, `regular`, `mono`, `monobold`) render smooth vector text.
+The `bitmap` font uses pixel-scaled 7x13 bitmap rendering for a retro look.
 
 Priority: CLI flag > environment variable > config file.
 

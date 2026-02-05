@@ -17,8 +17,8 @@ func TestLoadConfig_Default(t *testing.T) {
 	if cfg.PollIntervalSeconds != 300 {
 		t.Errorf("PollIntervalSeconds = %d, want 300", cfg.PollIntervalSeconds)
 	}
-	if cfg.FontSize != 18 {
-		t.Errorf("FontSize = %f, want 18", cfg.FontSize)
+	if cfg.FontSize != 34 {
+		t.Errorf("FontSize = %f, want 34", cfg.FontSize)
 	}
 	if cfg.Thresholds.Warning != 60 {
 		t.Errorf("Warning = %f, want 60", cfg.Thresholds.Warning)
@@ -68,8 +68,8 @@ func TestLoadConfig_PartialFile(t *testing.T) {
 	if cfg.PollIntervalSeconds != 60 {
 		t.Errorf("PollIntervalSeconds = %d, want 60", cfg.PollIntervalSeconds)
 	}
-	if cfg.FontSize != 18 {
-		t.Errorf("FontSize = %f, want 18 (default)", cfg.FontSize)
+	if cfg.FontSize != 34 {
+		t.Errorf("FontSize = %f, want 34 (default)", cfg.FontSize)
 	}
 }
 
