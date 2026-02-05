@@ -37,6 +37,9 @@ func main() {
 	doUpdate := flag.Bool("update", false, "check and update to latest release")
 	pollInterval := flag.Int("poll-interval", 0, "poll interval in seconds (env: CLAUDE_QUOTA_POLL_INTERVAL)")
 	fontSize := flag.Float64("font-size", 0, "icon font size (env: CLAUDE_QUOTA_FONT_SIZE)")
+	fontName := flag.String("font-name", "", "icon font name: bold, regular, mono, monobold, bitmap (env: CLAUDE_QUOTA_FONT_NAME)")
+	haloSize := flag.Float64("halo-size", -1, "text halo/outline size in pixels, 0 to disable (env: CLAUDE_QUOTA_HALO_SIZE)")
+	iconSize := flag.Int("icon-size", 0, "icon size in pixels (env: CLAUDE_QUOTA_ICON_SIZE)")
 	flag.Usage = func() {
 		fmt.Print(versionStringLong())
 		fmt.Fprintf(os.Stderr, "\nUsage: %s [options]\n\nOptions:\n", os.Args[0])
@@ -72,7 +75,7 @@ func main() {
 	fmt.Printf("Config: %s\n", configPath)
 
 	cfg := loadConfig()
-	applyOverrides(&cfg, *pollInterval, *fontSize)
+	applyOverrides(&cfg, *pollInterval, *fontSize, *fontName, *haloSize, *iconSize)
 
 	client := &http.Client{Timeout: 30 * time.Second}
 
@@ -98,7 +101,7 @@ func main() {
 }
 
 // applyOverrides applies env vars and flags to config. Priority: flag > env > config file.
-func applyOverrides(cfg *Config, flagPollInterval int, flagFontSize float64) {
+func applyOverrides(cfg *Config, flagPollInterval int, flagFontSize float64, flagFontName string, flagHaloSize float64, flagIconSize int) {
 	if v := os.Getenv("CLAUDE_QUOTA_POLL_INTERVAL"); v != "" {
 		if i, err := strconv.Atoi(v); err != nil || i <= 0 {
 			log.Printf("Ignoring invalid CLAUDE_QUOTA_POLL_INTERVAL=%q", v)
@@ -119,5 +122,42 @@ func applyOverrides(cfg *Config, flagPollInterval int, flagFontSize float64) {
 	}
 	if flagFontSize > 0 {
 		cfg.FontSize = flagFontSize
+	}
+
+	if v := os.Getenv("CLAUDE_QUOTA_FONT_NAME"); v != "" {
+		if !ValidFontName(v) {
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_FONT_NAME=%q", v)
+		} else {
+			cfg.FontName = v
+		}
+	}
+	if flagFontName != "" {
+		if !ValidFontName(flagFontName) {
+			log.Printf("Ignoring invalid -font-name=%q", flagFontName)
+		} else {
+			cfg.FontName = flagFontName
+		}
+	}
+
+	if v := os.Getenv("CLAUDE_QUOTA_HALO_SIZE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err != nil || f < 0 {
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_HALO_SIZE=%q", v)
+		} else {
+			cfg.HaloSize = f
+		}
+	}
+	if flagHaloSize >= 0 {
+		cfg.HaloSize = flagHaloSize
+	}
+
+	if v := os.Getenv("CLAUDE_QUOTA_ICON_SIZE"); v != "" {
+		if i, err := strconv.Atoi(v); err != nil || i <= 0 {
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_ICON_SIZE=%q", v)
+		} else {
+			cfg.IconSize = i
+		}
+	}
+	if flagIconSize > 0 {
+		cfg.IconSize = flagIconSize
 	}
 }
