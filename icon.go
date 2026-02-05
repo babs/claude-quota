@@ -32,7 +32,7 @@ func colorForUtilization(utilization *float64, thresholds Thresholds) color.RGBA
 }
 
 // renderIcon creates a 64x64 RGBA icon image based on the quota state.
-func renderIcon(state QuotaState, thresholds Thresholds) image.Image {
+func renderIcon(state QuotaState, thresholds Thresholds, fontSize float64) image.Image {
 	dc := gg.NewContext(iconSize, iconSize)
 	dc.SetColor(color.RGBA{0, 0, 0, 0})
 	dc.Clear()
@@ -40,13 +40,45 @@ func renderIcon(state QuotaState, thresholds Thresholds) image.Image {
 	utilization := state.FiveHour
 	col := colorForUtilization(utilization, thresholds)
 
-	if state.Error != "" {
+	if state.TokenExpired {
+		drawExpiredIcon(dc)
+	} else if state.Error != "" {
 		drawErrorIcon(dc, col)
 	} else {
-		drawNormalIcon(dc, utilization, col)
+		drawNormalIcon(dc, utilization, col, fontSize)
 	}
 
 	return dc.Image()
+}
+
+// drawExpiredIcon draws an amber warning triangle with "!" for token expiry.
+func drawExpiredIcon(dc *gg.Context) {
+	amber := color.RGBA{255, 193, 7, 255}
+	center := float64(iconSize) / 2
+	margin := 4.0
+
+	// Triangle vertices: top-center, bottom-left, bottom-right
+	topX, topY := center, margin
+	botL, botR, botY := margin, float64(iconSize)-margin, float64(iconSize)-margin
+
+	// Filled triangle
+	dc.SetColor(amber)
+	dc.MoveTo(topX, topY)
+	dc.LineTo(botR, botY)
+	dc.LineTo(botL, botY)
+	dc.ClosePath()
+	dc.Fill()
+
+	// "!" centered in the triangle (visual center is lower than geometric center)
+	face, err := loadFontFace(28)
+	if err != nil {
+		return
+	}
+	dc.SetFontFace(face)
+	w, h := dc.MeasureString("!")
+	// Shift down to account for triangle's visual weight
+	dc.SetColor(color.RGBA{0, 0, 0, 255})
+	dc.DrawString("!", center-w/2, center+h/2+6)
 }
 
 // drawErrorIcon draws a gray circle with a red X.
@@ -69,7 +101,7 @@ func drawErrorIcon(dc *gg.Context, _ color.RGBA) {
 }
 
 // drawNormalIcon draws the ring outline, pie slice, and text.
-func drawNormalIcon(dc *gg.Context, utilization *float64, col color.RGBA) {
+func drawNormalIcon(dc *gg.Context, utilization *float64, col color.RGBA, fontSize float64) {
 	center := float64(iconSize) / 2
 	outerRadius := float64(iconSize)/2 - 4
 
@@ -100,12 +132,12 @@ func drawNormalIcon(dc *gg.Context, utilization *float64, col color.RGBA) {
 
 	// Text
 	text := fmt.Sprintf("%d", int(*utilization))
-	drawCenteredText(dc, text, center, center-1)
+	drawCenteredText(dc, text, center, center-1, fontSize)
 }
 
 // drawCenteredText draws text centered at (cx, cy) with a black shadow.
-func drawCenteredText(dc *gg.Context, text string, cx, cy float64) {
-	face, err := loadFontFace(18)
+func drawCenteredText(dc *gg.Context, text string, cx, cy, fontSize float64) {
+	face, err := loadFontFace(fontSize)
 	if err != nil {
 		return
 	}
