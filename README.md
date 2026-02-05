@@ -10,11 +10,16 @@ Reads OAuth credentials from Claude Code CLI (`~/.claude/.credentials.json`),
 polls the Anthropic usage API, and renders a color-coded pie chart icon
 with live quota percentages.
 
+|         Systray icon          |              Hover tooltip              |             Context menu              |
+| :---------------------------: | :-------------------------------------: | :-----------------------------------: |
+| ![Systray icon](img/icon.png) | ![Hover tooltip](img/hover-tooltip.png) | ![Context menu](img/context-menu.png) |
+
 ## Features
 
 - 5-hour, 7-day, and Sonnet 7-day quota tracking
 - Color-coded icon: green (<60%), yellow (60-85%), red (>85%)
-- Automatic OAuth token refresh
+- Configurable icon size for HiDPI displays
+- Reloads OAuth token from disk when expired (relies on `claude login`)
 - Self-update from GitHub releases (`-update`)
 - Cross-platform: Linux, Windows, macOS
 
@@ -48,9 +53,12 @@ For a release build with version info and cross-compilation:
 ## Usage
 
 ```bash
-./claude-quota            # start the systray widget
-./claude-quota -version   # show version info
-./claude-quota -update    # self-update to latest release
+./claude-quota                  # start the systray widget
+./claude-quota -version         # show version info
+./claude-quota -update          # self-update to latest release
+./claude-quota -poll-interval 60
+./claude-quota -font-size 24
+./claude-quota -icon-size 128   # for HiDPI / large systray panels
 ```
 
 Click the systray icon to see the quota breakdown with reset times.
@@ -62,12 +70,24 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
 ```json
 {
   "poll_interval_seconds": 300,
+  "font_size": 18,
+  "icon_size": 64,
   "thresholds": {
     "warning": 60,
     "critical": 85
   }
 }
 ```
+
+| Setting                 | Config key              | Env var                      | CLI flag         | Default |
+| ----------------------- | ----------------------- | ---------------------------- | ---------------- | ------- |
+| Poll interval (seconds) | `poll_interval_seconds` | `CLAUDE_QUOTA_POLL_INTERVAL` | `-poll-interval` | `300`   |
+| Font size (px)          | `font_size`             | `CLAUDE_QUOTA_FONT_SIZE`     | `-font-size`     | `18`    |
+| Icon size (px)          | `icon_size`             | `CLAUDE_QUOTA_ICON_SIZE`     | `-icon-size`     | `64`    |
+| Warning threshold (%)   | `thresholds.warning`    | —                            | —                | `60`    |
+| Critical threshold (%)  | `thresholds.critical`   | —                            | —                | `85`    |
+
+Priority: CLI flag > environment variable > config file.
 
 ## Autostart (Linux)
 
@@ -88,8 +108,10 @@ Terminal=false
 ## How it works
 
 The widget uses Claude Code's OAuth credentials to call
-`api.anthropic.com/api/oauth/usage`. Tokens are refreshed automatically
-when they expire and persisted back to the credentials file.
+`api.anthropic.com/api/oauth/usage`. When the token expires, it is
+reloaded from disk in case Claude Code has refreshed it externally.
+If the token is still expired, an amber warning icon is shown — run
+`claude login` to re-authenticate.
 
 ## License
 
