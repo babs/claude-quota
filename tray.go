@@ -147,7 +147,7 @@ func (a *App) updateUI() {
 	state := a.quota.State()
 
 	// Update icon.
-	img := renderIcon(state, a.config.Thresholds)
+	img := renderIcon(state, a.config.Thresholds, a.config.FontSize)
 	iconData, err := iconToBytes(img)
 	if err != nil {
 		log.Printf("Icon encode error: %v", err)

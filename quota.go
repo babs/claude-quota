@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,9 +10,7 @@ import (
 	"time"
 )
 
-const (
-	usageURL = "https://api.anthropic.com/api/oauth/usage"
-)
+var usageURL = "https://api.anthropic.com/api/oauth/usage"
 
 // QuotaState holds the current quota snapshot.
 type QuotaState struct {
@@ -23,6 +22,7 @@ type QuotaState struct {
 	SevenDaySonnetResets *time.Time
 	LastUpdate           *time.Time
 	Error                string
+	TokenExpired         bool
 }
 
 // usageResponse matches the JSON returned by the usage API.
@@ -66,7 +66,10 @@ func (qc *QuotaClient) Fetch() bool {
 	if err != nil {
 		log.Printf("Credential error: %v", err)
 		qc.mu.Lock()
-		qc.state.Error = truncate(err.Error(), 50)
+		qc.state = QuotaState{
+			Error:        truncate(err.Error(), 50),
+			TokenExpired: errors.Is(err, ErrTokenExpired),
+		}
 		qc.mu.Unlock()
 		return false
 	}
@@ -74,9 +77,7 @@ func (qc *QuotaClient) Fetch() bool {
 	req, err := http.NewRequest("GET", usageURL, nil)
 	if err != nil {
 		log.Printf("Request error: %v", err)
-		qc.mu.Lock()
-		qc.state.Error = truncate(err.Error(), 50)
-		qc.mu.Unlock()
+		qc.setError(truncate(err.Error(), 50))
 		return false
 	}
 
@@ -88,9 +89,7 @@ func (qc *QuotaClient) Fetch() bool {
 	resp, err := qc.client.Do(req)
 	if err != nil {
 		log.Printf("Fetch failed: %v", err)
-		qc.mu.Lock()
-		qc.state.Error = truncate(err.Error(), 50)
-		qc.mu.Unlock()
+		qc.setError(truncate(err.Error(), 50))
 		return false
 	}
 	defer resp.Body.Close()
@@ -106,18 +105,14 @@ func (qc *QuotaClient) Fetch() bool {
 			msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
 		log.Printf("API error: %s", msg)
-		qc.mu.Lock()
-		qc.state.Error = msg
-		qc.mu.Unlock()
+		qc.setError(msg)
 		return false
 	}
 
 	var data usageResponse
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		log.Printf("JSON parse failed: %v", err)
-		qc.mu.Lock()
-		qc.state.Error = truncate(err.Error(), 50)
-		qc.mu.Unlock()
+		qc.setError(truncate(err.Error(), 50))
 		return false
 	}
 
@@ -135,6 +130,13 @@ func (qc *QuotaClient) Fetch() bool {
 	return true
 }
 
+// setError resets state to an error-only snapshot.
+func (qc *QuotaClient) setError(msg string) {
+	qc.mu.Lock()
+	qc.state = QuotaState{Error: msg}
+	qc.mu.Unlock()
+}
+
 // parseBucket extracts utilization and reset time from an API bucket.
 func parseBucket(bucket *usageBucket, util **float64, resets **time.Time) {
 	if bucket == nil {
@@ -147,20 +149,17 @@ func parseBucket(bucket *usageBucket, util **float64, resets **time.Time) {
 	if bucket.ResetsAt != nil {
 		t, err := time.Parse(time.RFC3339, *bucket.ResetsAt)
 		if err != nil {
-			// Try with 'Z' replaced
-			t, err = time.Parse(time.RFC3339, *bucket.ResetsAt)
-			if err != nil {
-				log.Printf("Failed to parse reset time %q: %v", *bucket.ResetsAt, err)
-				return
-			}
+			log.Printf("Failed to parse reset time %q: %v", *bucket.ResetsAt, err)
+			return
 		}
 		*resets = &t
 	}
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
-	return s[:n]
+	return string(runes[:n])
 }

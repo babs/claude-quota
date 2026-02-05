@@ -88,7 +88,7 @@ func TestRenderIcon_ProducesImage(t *testing.T) {
 	v := 42.0
 	state := QuotaState{FiveHour: &v}
 	th := Thresholds{Warning: 60, Critical: 85}
-	img := renderIcon(state, th)
+	img := renderIcon(state, th, 18)
 	bounds := img.Bounds()
 	if bounds.Dx() != 64 || bounds.Dy() != 64 {
 		t.Errorf("renderIcon size = %dx%d, want 64x64", bounds.Dx(), bounds.Dy())
@@ -98,7 +98,7 @@ func TestRenderIcon_ProducesImage(t *testing.T) {
 func TestRenderIcon_ErrorState(t *testing.T) {
 	state := QuotaState{Error: "something broke"}
 	th := Thresholds{Warning: 60, Critical: 85}
-	img := renderIcon(state, th)
+	img := renderIcon(state, th, 18)
 	bounds := img.Bounds()
 	if bounds.Dx() != 64 || bounds.Dy() != 64 {
 		t.Errorf("renderIcon error size = %dx%d, want 64x64", bounds.Dx(), bounds.Dy())
@@ -108,17 +108,44 @@ func TestRenderIcon_ErrorState(t *testing.T) {
 func TestRenderIcon_NilUtilization(t *testing.T) {
 	state := QuotaState{}
 	th := Thresholds{Warning: 60, Critical: 85}
-	img := renderIcon(state, th)
+	img := renderIcon(state, th, 18)
 	bounds := img.Bounds()
 	if bounds.Dx() != 64 || bounds.Dy() != 64 {
 		t.Errorf("renderIcon nil size = %dx%d, want 64x64", bounds.Dx(), bounds.Dy())
 	}
 }
 
+func TestRenderIcon_TokenExpired(t *testing.T) {
+	state := QuotaState{Error: "OAuth token has expired", TokenExpired: true}
+	th := Thresholds{Warning: 60, Critical: 85}
+	img := renderIcon(state, th, 18)
+	bounds := img.Bounds()
+	if bounds.Dx() != 64 || bounds.Dy() != 64 {
+		t.Errorf("renderIcon expired size = %dx%d, want 64x64", bounds.Dx(), bounds.Dy())
+	}
+
+	// TokenExpired should produce a different icon than a generic error.
+	errState := QuotaState{Error: "something broke"}
+	errImg := renderIcon(errState, th, 18)
+
+	errData, err := iconToBytes(errImg)
+	if err != nil {
+		t.Fatalf("iconToBytes error icon: %v", err)
+	}
+	expData, err := iconToBytes(img)
+	if err != nil {
+		t.Fatalf("iconToBytes expired icon: %v", err)
+	}
+
+	if string(expData) == string(errData) {
+		t.Error("expired icon should differ from generic error icon")
+	}
+}
+
 func TestIconToBytes_ValidPNG(t *testing.T) {
 	state := QuotaState{}
 	th := Thresholds{Warning: 60, Critical: 85}
-	img := renderIcon(state, th)
+	img := renderIcon(state, th, 18)
 	data, err := iconToBytes(img)
 	if err != nil {
 		t.Fatalf("iconToBytes error: %v", err)

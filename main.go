@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"time"
 )
 
@@ -34,6 +35,8 @@ func main() {
 
 	showVersion := flag.Bool("version", false, "show version and exit")
 	doUpdate := flag.Bool("update", false, "check and update to latest release")
+	pollInterval := flag.Int("poll-interval", 0, "poll interval in seconds (env: CLAUDE_QUOTA_POLL_INTERVAL)")
+	fontSize := flag.Float64("font-size", 0, "icon font size (env: CLAUDE_QUOTA_FONT_SIZE)")
 	flag.Usage = func() {
 		fmt.Print(versionStringLong())
 		fmt.Fprintf(os.Stderr, "\nUsage: %s [options]\n\nOptions:\n", os.Args[0])
@@ -69,10 +72,11 @@ func main() {
 	fmt.Printf("Config: %s\n", configPath)
 
 	cfg := loadConfig()
+	applyOverrides(&cfg, *pollInterval, *fontSize)
 
 	client := &http.Client{Timeout: 30 * time.Second}
 
-	creds, err := NewOAuthCredentials(client)
+	creds, err := NewOAuthCredentials()
 	if err != nil {
 		fmt.Printf("\nError: %v\n", err)
 		os.Exit(1)
@@ -91,4 +95,29 @@ func main() {
 	}()
 
 	app.Run()
+}
+
+// applyOverrides applies env vars and flags to config. Priority: flag > env > config file.
+func applyOverrides(cfg *Config, flagPollInterval int, flagFontSize float64) {
+	if v := os.Getenv("CLAUDE_QUOTA_POLL_INTERVAL"); v != "" {
+		if i, err := strconv.Atoi(v); err != nil || i <= 0 {
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_POLL_INTERVAL=%q", v)
+		} else {
+			cfg.PollIntervalSeconds = i
+		}
+	}
+	if flagPollInterval > 0 {
+		cfg.PollIntervalSeconds = flagPollInterval
+	}
+
+	if v := os.Getenv("CLAUDE_QUOTA_FONT_SIZE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err != nil || f <= 0 {
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_FONT_SIZE=%q", v)
+		} else {
+			cfg.FontSize = f
+		}
+	}
+	if flagFontSize > 0 {
+		cfg.FontSize = flagFontSize
+	}
 }

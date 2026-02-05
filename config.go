@@ -11,6 +11,7 @@ import (
 // Config holds the widget configuration.
 type Config struct {
 	PollIntervalSeconds int        `json:"poll_interval_seconds"`
+	FontSize            float64    `json:"font_size"`
 	Thresholds          Thresholds `json:"thresholds"`
 }
 
@@ -34,6 +35,7 @@ func init() {
 func defaultConfig() Config {
 	return Config{
 		PollIntervalSeconds: 300,
+		FontSize:            18,
 		Thresholds: Thresholds{
 			Warning:  60,
 			Critical: 85,
