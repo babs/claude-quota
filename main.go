@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"time"
 )
@@ -40,6 +43,9 @@ func main() {
 	fontName := flag.String("font-name", "", "icon font name: bold, regular, mono, monobold, bitmap (env: CLAUDE_QUOTA_FONT_NAME)")
 	haloSize := flag.Float64("halo-size", -1, "text halo/outline size in pixels, 0 to disable (env: CLAUDE_QUOTA_HALO_SIZE)")
 	iconSize := flag.Int("icon-size", 0, "icon size in pixels (env: CLAUDE_QUOTA_ICON_SIZE)")
+	warningThreshold := flag.Float64("warning-threshold", 0, "warning utilization threshold in % (env: CLAUDE_QUOTA_WARNING_THRESHOLD)")
+	criticalThreshold := flag.Float64("critical-threshold", 0, "critical utilization threshold in % (env: CLAUDE_QUOTA_CRITICAL_THRESHOLD)")
+	claudeHome := flag.String("claude-home", "", "home directory for Claude credentials (env: CLAUDE_QUOTA_CLAUDE_HOME)")
 	flag.Usage = func() {
 		fmt.Print(versionStringLong())
 		fmt.Fprintf(os.Stderr, "\nUsage: %s [options]\n\nOptions:\n", os.Args[0])
@@ -57,6 +63,19 @@ func main() {
 		return
 	}
 
+	cfg := loadConfig()
+
+	// Resolve claude-home: config < env < flag.
+	if cfg.ClaudeHome != "" {
+		credentialsPath = filepath.Join(cfg.ClaudeHome, ".claude", ".credentials.json")
+	}
+	if v := os.Getenv("CLAUDE_QUOTA_CLAUDE_HOME"); v != "" {
+		credentialsPath = filepath.Join(v, ".claude", ".credentials.json")
+	}
+	if *claudeHome != "" {
+		credentialsPath = filepath.Join(*claudeHome, ".claude", ".credentials.json")
+	}
+
 	fmt.Println("WARNING: This tool uses Claude Code's OAuth client ID to access your")
 	fmt.Println("quota data via an undocumented API. This is not sanctioned by Anthropic")
 	fmt.Println("and may violate the Terms of Service. Use at your own risk.")
@@ -67,6 +86,14 @@ func main() {
 		fmt.Println("Claude Code credentials not found.")
 		fmt.Printf("Expected: %s\n", credentialsPath)
 		fmt.Println("\nRun 'claude login' to authenticate Claude Code first.")
+		if runtime.GOOS == "windows" {
+			fmt.Println("\nIf Claude Code is installed in WSL, use -claude-home to point to")
+			fmt.Println(`the WSL home directory, e.g.:`)
+			fmt.Println(`  claude-quota -claude-home \\wsl$\<distro>\home\<username>`)
+			fmt.Println(`Run "wsl -l -q" to list available WSL distributions.`)
+			fmt.Print("\nPress enter to continue...")
+			bufio.NewReader(os.Stdin).ReadBytes('\n')
+		}
 		os.Exit(1)
 	}
 
@@ -74,8 +101,15 @@ func main() {
 	fmt.Printf("Credentials: %s\n", credentialsPath)
 	fmt.Printf("Config: %s\n", configPath)
 
-	cfg := loadConfig()
-	applyOverrides(&cfg, *pollInterval, *fontSize, *fontName, *haloSize, *iconSize)
+	applyOverrides(&cfg, overrides{
+		PollInterval:      *pollInterval,
+		FontSize:          *fontSize,
+		FontName:          *fontName,
+		HaloSize:          *haloSize,
+		IconSize:          *iconSize,
+		WarningThreshold:  *warningThreshold,
+		CriticalThreshold: *criticalThreshold,
+	})
 
 	client := &http.Client{Timeout: 30 * time.Second}
 
@@ -100,8 +134,19 @@ func main() {
 	app.Run()
 }
 
+// overrides holds CLI flag values for config overrides.
+type overrides struct {
+	PollInterval      int
+	FontSize          float64
+	FontName          string
+	HaloSize          float64
+	IconSize          int
+	WarningThreshold  float64
+	CriticalThreshold float64
+}
+
 // applyOverrides applies env vars and flags to config. Priority: flag > env > config file.
-func applyOverrides(cfg *Config, flagPollInterval int, flagFontSize float64, flagFontName string, flagHaloSize float64, flagIconSize int) {
+func applyOverrides(cfg *Config, o overrides) {
 	if v := os.Getenv("CLAUDE_QUOTA_POLL_INTERVAL"); v != "" {
 		if i, err := strconv.Atoi(v); err != nil || i <= 0 {
 			log.Printf("Ignoring invalid CLAUDE_QUOTA_POLL_INTERVAL=%q", v)
@@ -109,8 +154,8 @@ func applyOverrides(cfg *Config, flagPollInterval int, flagFontSize float64, fla
 			cfg.PollIntervalSeconds = i
 		}
 	}
-	if flagPollInterval > 0 {
-		cfg.PollIntervalSeconds = flagPollInterval
+	if o.PollInterval > 0 {
+		cfg.PollIntervalSeconds = o.PollInterval
 	}
 
 	if v := os.Getenv("CLAUDE_QUOTA_FONT_SIZE"); v != "" {
@@ -120,8 +165,8 @@ func applyOverrides(cfg *Config, flagPollInterval int, flagFontSize float64, fla
 			cfg.FontSize = f
 		}
 	}
-	if flagFontSize > 0 {
-		cfg.FontSize = flagFontSize
+	if o.FontSize > 0 {
+		cfg.FontSize = o.FontSize
 	}
 
 	if v := os.Getenv("CLAUDE_QUOTA_FONT_NAME"); v != "" {
@@ -131,11 +176,11 @@ func applyOverrides(cfg *Config, flagPollInterval int, flagFontSize float64, fla
 			cfg.FontName = v
 		}
 	}
-	if flagFontName != "" {
-		if !ValidFontName(flagFontName) {
-			log.Printf("Ignoring invalid -font-name=%q", flagFontName)
+	if o.FontName != "" {
+		if !ValidFontName(o.FontName) {
+			log.Printf("Ignoring invalid -font-name=%q", o.FontName)
 		} else {
-			cfg.FontName = flagFontName
+			cfg.FontName = o.FontName
 		}
 	}
 
@@ -146,8 +191,8 @@ func applyOverrides(cfg *Config, flagPollInterval int, flagFontSize float64, fla
 			cfg.HaloSize = f
 		}
 	}
-	if flagHaloSize >= 0 {
-		cfg.HaloSize = flagHaloSize
+	if o.HaloSize >= 0 {
+		cfg.HaloSize = o.HaloSize
 	}
 
 	if v := os.Getenv("CLAUDE_QUOTA_ICON_SIZE"); v != "" {
@@ -157,7 +202,38 @@ func applyOverrides(cfg *Config, flagPollInterval int, flagFontSize float64, fla
 			cfg.IconSize = i
 		}
 	}
-	if flagIconSize > 0 {
-		cfg.IconSize = flagIconSize
+	if o.IconSize > 0 {
+		cfg.IconSize = o.IconSize
+	}
+
+	if v := os.Getenv("CLAUDE_QUOTA_WARNING_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err != nil || f <= 0 || f > 100 {
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_WARNING_THRESHOLD=%q", v)
+		} else {
+			cfg.Thresholds.Warning = f
+		}
+	}
+	if o.WarningThreshold > 0 && o.WarningThreshold <= 100 {
+		cfg.Thresholds.Warning = o.WarningThreshold
+	} else if o.WarningThreshold > 100 {
+		log.Printf("Ignoring invalid -warning-threshold=%.0f (must be 1-100)", o.WarningThreshold)
+	}
+
+	if v := os.Getenv("CLAUDE_QUOTA_CRITICAL_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err != nil || f <= 0 || f > 100 {
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_CRITICAL_THRESHOLD=%q", v)
+		} else {
+			cfg.Thresholds.Critical = f
+		}
+	}
+	if o.CriticalThreshold > 0 && o.CriticalThreshold <= 100 {
+		cfg.Thresholds.Critical = o.CriticalThreshold
+	} else if o.CriticalThreshold > 100 {
+		log.Printf("Ignoring invalid -critical-threshold=%.0f (must be 1-100)", o.CriticalThreshold)
+	}
+
+	if cfg.Thresholds.Warning >= cfg.Thresholds.Critical {
+		log.Printf("Warning threshold (%.0f) >= critical threshold (%.0f), swapping", cfg.Thresholds.Warning, cfg.Thresholds.Critical)
+		cfg.Thresholds.Warning, cfg.Thresholds.Critical = cfg.Thresholds.Critical, cfg.Thresholds.Warning
 	}
 }

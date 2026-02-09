@@ -310,8 +310,8 @@ func drawScaledBitmapText(dc *gg.Context, text string, cx, cy, targetSize, shado
 	dc.DrawImage(renderScaled(fg), x, y)
 }
 
-// iconToBytes encodes an image as PNG bytes for systray.
-func iconToBytes(img image.Image) ([]byte, error) {
+// encodePNG encodes an image as PNG bytes.
+func encodePNG(img image.Image) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
 		return nil, err

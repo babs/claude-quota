@@ -82,15 +82,16 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
 }
 ```
 
-| Setting                 | Config key              | Env var                      | CLI flag         | Default  |
-| ----------------------- | ----------------------- | ---------------------------- | ---------------- | -------- |
-| Poll interval (seconds) | `poll_interval_seconds` | `CLAUDE_QUOTA_POLL_INTERVAL` | `-poll-interval` | `300`    |
-| Font size               | `font_size`             | `CLAUDE_QUOTA_FONT_SIZE`     | `-font-size`     | `34`     |
-| Font name               | `font_name`             | `CLAUDE_QUOTA_FONT_NAME`     | `-font-name`     | `"bold"` |
-| Halo size               | `halo_size`             | `CLAUDE_QUOTA_HALO_SIZE`     | `-halo-size`     | `2`      |
-| Icon size (px)          | `icon_size`             | `CLAUDE_QUOTA_ICON_SIZE`     | `-icon-size`     | `64`     |
-| Warning threshold (%)   | `thresholds.warning`    | —                            | —                | `60`     |
-| Critical threshold (%)  | `thresholds.critical`   | —                            | —                | `85`     |
+| Setting                 | Config key              | Env var                           | CLI flag              | Default  |
+| ----------------------- | ----------------------- | --------------------------------- | --------------------- | -------- |
+| Claude home dir         | `claude_home`           | `CLAUDE_QUOTA_CLAUDE_HOME`        | `-claude-home`        | `~`      |
+| Poll interval (seconds) | `poll_interval_seconds` | `CLAUDE_QUOTA_POLL_INTERVAL`      | `-poll-interval`      | `300`    |
+| Font size               | `font_size`             | `CLAUDE_QUOTA_FONT_SIZE`          | `-font-size`          | `34`     |
+| Font name               | `font_name`             | `CLAUDE_QUOTA_FONT_NAME`          | `-font-name`          | `"bold"` |
+| Halo size               | `halo_size`             | `CLAUDE_QUOTA_HALO_SIZE`          | `-halo-size`          | `2`      |
+| Icon size (px)          | `icon_size`             | `CLAUDE_QUOTA_ICON_SIZE`          | `-icon-size`          | `64`     |
+| Warning threshold (%)   | `thresholds.warning`    | `CLAUDE_QUOTA_WARNING_THRESHOLD`  | `-warning-threshold`  | `60`     |
+| Critical threshold (%)  | `thresholds.critical`   | `CLAUDE_QUOTA_CRITICAL_THRESHOLD` | `-critical-threshold` | `85`     |
 
 `font_size` and `halo_size` are relative to the base icon size (64px). They scale
 automatically with `icon_size` — e.g. at `icon_size: 128` the rendered font is 2x larger.
@@ -100,6 +101,25 @@ TTF fonts (`bold`, `regular`, `mono`, `monobold`) render smooth vector text.
 The `bitmap` font uses pixel-scaled 7x13 bitmap rendering for a retro look.
 
 Priority: CLI flag > environment variable > config file.
+
+## Windows + WSL
+
+If Claude Code is installed inside WSL, the credentials live in the WSL
+filesystem. Point `claude-quota.exe` to the WSL home directory:
+
+```powershell
+claude-quota.exe -claude-home \\wsl$\<distro>\home\<username>
+```
+
+Or via environment variable:
+
+```powershell
+set CLAUDE_QUOTA_CLAUDE_HOME=\\wsl$\<distro>\home\<username>
+claude-quota.exe
+```
+
+Replace `<distro>` with your WSL distribution name and `<username>` with your WSL username.
+To list available WSL distributions, run `wsl -l -q` in PowerShell or cmd.
 
 ## Autostart (Linux)
 

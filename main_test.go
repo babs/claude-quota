@@ -4,9 +4,13 @@ import (
 	"testing"
 )
 
+// noOverrides is the zero-value overrides struct that changes nothing.
+// HaloSize -1 means "not set" (0 is a valid value that disables halo).
+var noOverrides = overrides{HaloSize: -1}
+
 func TestApplyOverrides_Defaults(t *testing.T) {
 	cfg := defaultConfig()
-	applyOverrides(&cfg, 0, 0, "", -1, 0)
+	applyOverrides(&cfg, noOverrides)
 	if cfg.PollIntervalSeconds != 300 {
 		t.Errorf("PollIntervalSeconds = %d, want 300", cfg.PollIntervalSeconds)
 	}
@@ -26,7 +30,10 @@ func TestApplyOverrides_Defaults(t *testing.T) {
 
 func TestApplyOverrides_Flags(t *testing.T) {
 	cfg := defaultConfig()
-	applyOverrides(&cfg, 60, 24, "mono", 3.0, 128)
+	applyOverrides(&cfg, overrides{
+		PollInterval: 60, FontSize: 24, FontName: "mono",
+		HaloSize: 3.0, IconSize: 128,
+	})
 	if cfg.PollIntervalSeconds != 60 {
 		t.Errorf("PollIntervalSeconds = %d, want 60", cfg.PollIntervalSeconds)
 	}
@@ -52,7 +59,7 @@ func TestApplyOverrides_EnvVars(t *testing.T) {
 	t.Setenv("CLAUDE_QUOTA_ICON_SIZE", "128")
 
 	cfg := defaultConfig()
-	applyOverrides(&cfg, 0, 0, "", -1, 0)
+	applyOverrides(&cfg, noOverrides)
 	if cfg.PollIntervalSeconds != 120 {
 		t.Errorf("PollIntervalSeconds = %d, want 120", cfg.PollIntervalSeconds)
 	}
@@ -78,7 +85,10 @@ func TestApplyOverrides_FlagOverridesEnv(t *testing.T) {
 	t.Setenv("CLAUDE_QUOTA_ICON_SIZE", "128")
 
 	cfg := defaultConfig()
-	applyOverrides(&cfg, 60, 24, "mono", 0.5, 256)
+	applyOverrides(&cfg, overrides{
+		PollInterval: 60, FontSize: 24, FontName: "mono",
+		HaloSize: 0.5, IconSize: 256,
+	})
 	if cfg.PollIntervalSeconds != 60 {
 		t.Errorf("PollIntervalSeconds = %d, want 60 (flag should override env)", cfg.PollIntervalSeconds)
 	}
@@ -104,7 +114,7 @@ func TestApplyOverrides_InvalidEnvIgnored(t *testing.T) {
 	t.Setenv("CLAUDE_QUOTA_ICON_SIZE", "-10")
 
 	cfg := defaultConfig()
-	applyOverrides(&cfg, 0, 0, "", -1, 0)
+	applyOverrides(&cfg, noOverrides)
 	if cfg.PollIntervalSeconds != 300 {
 		t.Errorf("PollIntervalSeconds = %d, want 300 (invalid env should be ignored)", cfg.PollIntervalSeconds)
 	}
@@ -124,7 +134,7 @@ func TestApplyOverrides_InvalidEnvIgnored(t *testing.T) {
 
 func TestApplyOverrides_InvalidFlagIgnored(t *testing.T) {
 	cfg := defaultConfig()
-	applyOverrides(&cfg, 0, 0, "unknown-font", -1, 0)
+	applyOverrides(&cfg, overrides{FontName: "unknown-font", HaloSize: -1})
 	if cfg.FontName != "bold" {
 		t.Errorf("FontName = %q, want %q (invalid flag should be ignored)", cfg.FontName, "bold")
 	}
@@ -132,7 +142,7 @@ func TestApplyOverrides_InvalidFlagIgnored(t *testing.T) {
 
 func TestApplyOverrides_HaloZeroDisables(t *testing.T) {
 	cfg := defaultConfig()
-	applyOverrides(&cfg, 0, 0, "", 0, 0)
+	applyOverrides(&cfg, overrides{HaloSize: 0})
 	if cfg.HaloSize != 0 {
 		t.Errorf("HaloSize = %f, want 0 (flag 0 should disable halo)", cfg.HaloSize)
 	}
@@ -141,8 +151,92 @@ func TestApplyOverrides_HaloZeroDisables(t *testing.T) {
 func TestApplyOverrides_HaloEnvZeroDisables(t *testing.T) {
 	t.Setenv("CLAUDE_QUOTA_HALO_SIZE", "0")
 	cfg := defaultConfig()
-	applyOverrides(&cfg, 0, 0, "", -1, 0)
+	applyOverrides(&cfg, noOverrides)
 	if cfg.HaloSize != 0 {
 		t.Errorf("HaloSize = %f, want 0 (env 0 should disable halo)", cfg.HaloSize)
+	}
+}
+
+func TestApplyOverrides_ThresholdFlags(t *testing.T) {
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{HaloSize: -1, WarningThreshold: 50, CriticalThreshold: 90})
+	if cfg.Thresholds.Warning != 50 {
+		t.Errorf("Warning = %f, want 50", cfg.Thresholds.Warning)
+	}
+	if cfg.Thresholds.Critical != 90 {
+		t.Errorf("Critical = %f, want 90", cfg.Thresholds.Critical)
+	}
+}
+
+func TestApplyOverrides_ThresholdEnvVars(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_WARNING_THRESHOLD", "40")
+	t.Setenv("CLAUDE_QUOTA_CRITICAL_THRESHOLD", "70")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, noOverrides)
+	if cfg.Thresholds.Warning != 40 {
+		t.Errorf("Warning = %f, want 40", cfg.Thresholds.Warning)
+	}
+	if cfg.Thresholds.Critical != 70 {
+		t.Errorf("Critical = %f, want 70", cfg.Thresholds.Critical)
+	}
+}
+
+func TestApplyOverrides_ThresholdFlagOverridesEnv(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_WARNING_THRESHOLD", "40")
+	t.Setenv("CLAUDE_QUOTA_CRITICAL_THRESHOLD", "70")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{HaloSize: -1, WarningThreshold: 50, CriticalThreshold: 90})
+	if cfg.Thresholds.Warning != 50 {
+		t.Errorf("Warning = %f, want 50 (flag should override env)", cfg.Thresholds.Warning)
+	}
+	if cfg.Thresholds.Critical != 90 {
+		t.Errorf("Critical = %f, want 90 (flag should override env)", cfg.Thresholds.Critical)
+	}
+}
+
+func TestApplyOverrides_ThresholdInvalidEnvIgnored(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_WARNING_THRESHOLD", "abc")
+	t.Setenv("CLAUDE_QUOTA_CRITICAL_THRESHOLD", "150")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, noOverrides)
+	if cfg.Thresholds.Warning != 60 {
+		t.Errorf("Warning = %f, want 60 (invalid env should be ignored)", cfg.Thresholds.Warning)
+	}
+	if cfg.Thresholds.Critical != 85 {
+		t.Errorf("Critical = %f, want 85 (invalid env should be ignored)", cfg.Thresholds.Critical)
+	}
+}
+
+func TestApplyOverrides_ThresholdFlagOver100Ignored(t *testing.T) {
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{HaloSize: -1, WarningThreshold: 200, CriticalThreshold: 300})
+	if cfg.Thresholds.Warning != 60 {
+		t.Errorf("Warning = %f, want 60 (>100 flag should be ignored)", cfg.Thresholds.Warning)
+	}
+	if cfg.Thresholds.Critical != 85 {
+		t.Errorf("Critical = %f, want 85 (>100 flag should be ignored)", cfg.Thresholds.Critical)
+	}
+}
+
+func TestApplyOverrides_ThresholdWarningGeCriticalSwaps(t *testing.T) {
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{HaloSize: -1, WarningThreshold: 90, CriticalThreshold: 50})
+	if cfg.Thresholds.Warning != 50 {
+		t.Errorf("Warning = %f, want 50 (should have been swapped)", cfg.Thresholds.Warning)
+	}
+	if cfg.Thresholds.Critical != 90 {
+		t.Errorf("Critical = %f, want 90 (should have been swapped)", cfg.Thresholds.Critical)
+	}
+}
+
+func TestApplyOverrides_ThresholdEqualSwaps(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Thresholds.Warning = 70
+	cfg.Thresholds.Critical = 70
+	applyOverrides(&cfg, noOverrides)
+	// Equal values: swapped, so warning < critical won't hold — but at least it's logged.
+	// After swap both are 70, which is still equal. The swap is a no-op but the log fires.
+	if cfg.Thresholds.Warning != 70 || cfg.Thresholds.Critical != 70 {
+		t.Errorf("Equal thresholds should remain 70/70 after swap, got %f/%f", cfg.Thresholds.Warning, cfg.Thresholds.Critical)
 	}
 }

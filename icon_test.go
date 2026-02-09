@@ -128,13 +128,13 @@ func TestRenderIcon_TokenExpired(t *testing.T) {
 	errState := QuotaState{Error: "something broke"}
 	errImg := renderIcon(errState, th, 34, 64, "bold", 2)
 
-	errData, err := iconToBytes(errImg)
+	errData, err := encodePNG(errImg)
 	if err != nil {
-		t.Fatalf("iconToBytes error icon: %v", err)
+		t.Fatalf("encodePNG error icon: %v", err)
 	}
-	expData, err := iconToBytes(img)
+	expData, err := encodePNG(img)
 	if err != nil {
-		t.Fatalf("iconToBytes expired icon: %v", err)
+		t.Fatalf("encodePNG expired icon: %v", err)
 	}
 
 	if string(expData) == string(errData) {
@@ -252,17 +252,17 @@ func TestRenderIcon_LargeHalo(t *testing.T) {
 	}
 }
 
-func TestIconToBytes_ValidPNG(t *testing.T) {
+func TestEncodePNG_Valid(t *testing.T) {
 	state := QuotaState{}
 	th := Thresholds{Warning: 60, Critical: 85}
 	img := renderIcon(state, th, 34, 64, "bold", 2)
-	data, err := iconToBytes(img)
+	data, err := encodePNG(img)
 	if err != nil {
-		t.Fatalf("iconToBytes error: %v", err)
+		t.Fatalf("encodePNG error: %v", err)
 	}
 	// PNG magic bytes.
 	if len(data) < 8 || data[0] != 0x89 || data[1] != 'P' || data[2] != 'N' || data[3] != 'G' {
-		t.Error("iconToBytes did not produce valid PNG data")
+		t.Error("encodePNG did not produce valid PNG data")
 	}
 }
 
