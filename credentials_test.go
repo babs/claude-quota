@@ -203,3 +203,35 @@ func TestGetAccessToken_ExpiredReloadFails(t *testing.T) {
 		t.Errorf("expected ErrTokenExpired wrapped, got: %v", err)
 	}
 }
+
+func TestCredentialsPath_CustomPath(t *testing.T) {
+	orig := credentialsPath
+	defer func() { credentialsPath = orig }()
+
+	dir := t.TempDir()
+	claudeDir := filepath.Join(dir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	creds := map[string]any{
+		"claudeAiOauth": map[string]any{
+			"accessToken": "wsl-token",
+			"expiresAt":   time.Now().UnixMilli() + 300_000,
+		},
+	}
+	data, _ := json.Marshal(creds)
+	if err := os.WriteFile(filepath.Join(claudeDir, ".credentials.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	credentialsPath = filepath.Join(dir, ".claude", ".credentials.json")
+
+	oc, err := NewOAuthCredentials()
+	if err != nil {
+		t.Fatalf("NewOAuthCredentials() error: %v", err)
+	}
+	if oc.accessToken != "wsl-token" {
+		t.Errorf("accessToken = %q, want %q", oc.accessToken, "wsl-token")
+	}
+}

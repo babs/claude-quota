@@ -30,7 +30,7 @@ if [ "$HOST_OS" = "darwin" ]; then
   TARGETS="darwin/amd64 darwin/arm64"
   CGO=1
 else
-  TARGETS="linux/amd64 linux/arm64 windows/amd64 windows/arm64"
+  TARGETS="${TARGETS:-linux/amd64 linux/arm64 windows/amd64 windows/arm64}"
   CGO=0
 fi
 

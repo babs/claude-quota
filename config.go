@@ -10,6 +10,7 @@ import (
 
 // Config holds the widget configuration.
 type Config struct {
+	ClaudeHome          string     `json:"claude_home,omitempty"`
 	PollIntervalSeconds int        `json:"poll_interval_seconds"`
 	FontSize            float64    `json:"font_size"`
 	FontName            string     `json:"font_name"`
@@ -95,6 +96,18 @@ func loadConfig() Config {
 			log.Printf("Unknown font_name %q in config, using default %q", cfg.FontName, defaults.FontName)
 		}
 		cfg.FontName = defaults.FontName
+	}
+	if cfg.Thresholds.Warning <= 0 || cfg.Thresholds.Warning > 100 {
+		log.Printf("Invalid thresholds.warning %v in config, using default %v", cfg.Thresholds.Warning, defaults.Thresholds.Warning)
+		cfg.Thresholds.Warning = defaults.Thresholds.Warning
+	}
+	if cfg.Thresholds.Critical <= 0 || cfg.Thresholds.Critical > 100 {
+		log.Printf("Invalid thresholds.critical %v in config, using default %v", cfg.Thresholds.Critical, defaults.Thresholds.Critical)
+		cfg.Thresholds.Critical = defaults.Thresholds.Critical
+	}
+	if cfg.Thresholds.Warning >= cfg.Thresholds.Critical {
+		log.Printf("Config thresholds.warning (%.0f) >= thresholds.critical (%.0f), swapping", cfg.Thresholds.Warning, cfg.Thresholds.Critical)
+		cfg.Thresholds.Warning, cfg.Thresholds.Critical = cfg.Thresholds.Critical, cfg.Thresholds.Warning
 	}
 
 	return cfg
