@@ -59,6 +59,24 @@ func formatUpdatedAgo(t *time.Time) string {
 	return fmt.Sprintf("Updated: %dh %dm ago", hours, minutes)
 }
 
+// formatSaturationLine returns a formatted saturation line, or "" if nil.
+func formatSaturationLine(saturation *time.Time) string {
+	if saturation == nil {
+		return ""
+	}
+	remaining := formatTimeRemaining(saturation)
+	date := formatResetDate(saturation)
+	return fmt.Sprintf("  - saturates in %s, %s", remaining, date)
+}
+
+// formatProjectionLine returns a formatted projection line, or "" if nil.
+func formatProjectionLine(projected *float64) string {
+	if projected == nil {
+		return ""
+	}
+	return fmt.Sprintf("  - projected ~%.0f%% at reset", *projected)
+}
+
 // formatQuotaLine formats a single quota line with remaining time and date.
 func formatQuotaLine(label string, utilization *float64, resets *time.Time) string {
 	if utilization == nil {

@@ -90,6 +90,23 @@ func TestFormatUpdatedAgo_Future(t *testing.T) {
 	}
 }
 
+func TestFormatSaturationLine_Nil(t *testing.T) {
+	got := formatSaturationLine(nil)
+	if got != "" {
+		t.Errorf("formatSaturationLine(nil) = %q, want %q", got, "")
+	}
+}
+
+func TestFormatSaturationLine_Future(t *testing.T) {
+	sat := time.Now().Add(1*time.Hour + 15*time.Minute + 30*time.Second)
+	got := formatSaturationLine(&sat)
+	date := formatResetDate(&sat)
+	expect := "  - saturates in 1h 15m, " + date
+	if got != expect {
+		t.Errorf("formatSaturationLine(+1h15m) = %q, want %q", got, expect)
+	}
+}
+
 func TestFormatQuotaLine_NilUtilization(t *testing.T) {
 	got := formatQuotaLine("5h", nil, nil)
 	if got != "5h: --" {
@@ -116,5 +133,20 @@ func TestFormatQuotaLine_WithUtilization_WithResets(t *testing.T) {
 	expect := "5h: 73% (resets in 2h 30m, " + date + ")"
 	if got != expect {
 		t.Errorf("formatQuotaLine(73, +2h30m) = %q, want %q", got, expect)
+	}
+}
+
+func TestFormatProjectionLine_Nil(t *testing.T) {
+	got := formatProjectionLine(nil)
+	if got != "" {
+		t.Errorf("formatProjectionLine(nil) = %q, want %q", got, "")
+	}
+}
+
+func TestFormatProjectionLine_Value(t *testing.T) {
+	proj := 35.7
+	got := formatProjectionLine(&proj)
+	if got != "  - projected ~36% at reset" {
+		t.Errorf("formatProjectionLine(35.7) = %q, want %q", got, "  - projected ~36% at reset")
 	}
 }

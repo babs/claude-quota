@@ -38,6 +38,15 @@ func ValidFontName(name string) bool {
 	return ok
 }
 
+// ValidIndicatorName returns true if the name is a known indicator type.
+func ValidIndicatorName(name string) bool {
+	switch name {
+	case "pie", "bar", "arc", "bar-proj":
+		return true
+	}
+	return false
+}
+
 // TTF font cache: parsed once per font name, faces cached per size.
 var (
 	ttfMu     sync.Mutex
@@ -105,37 +114,93 @@ func colorForUtilization(utilization *float64, thresholds Thresholds) color.RGBA
 	return color.RGBA{40, 167, 69, 255} // Green
 }
 
+// clampFrac converts a percentage (0–100+) to a fraction clamped to [0, 1].
+func clampFrac(pct float64) float64 {
+	f := pct / 100.0
+	if f < 0 {
+		return 0
+	}
+	if f > 1 {
+		return 1
+	}
+	return f
+}
+
+// RenderOptions holds rendering configuration for icon generation.
+type RenderOptions struct {
+	FontSize  float64
+	IconSize  int
+	FontName  string
+	HaloSize  float64
+	Indicator string
+	ShowText  bool
+}
+
+// drawParams holds shared, pre-scaled rendering parameters for internal draw functions.
+type drawParams struct {
+	fontSize float64 // FontSize * scale
+	iconSize int
+	s        float64 // scale factor (iconSize / 64)
+	fontName string
+	haloSize float64 // HaloSize * scale
+	showText bool
+}
+
 // renderIcon creates an RGBA icon image of the given size based on the quota state.
-func renderIcon(state QuotaState, thresholds Thresholds, fontSize float64, iconSize int, fontName string, haloSize float64) image.Image {
-	dc := gg.NewContext(iconSize, iconSize)
+func renderIcon(state QuotaState, thresholds Thresholds, opts RenderOptions) image.Image {
+	dc := gg.NewContext(opts.IconSize, opts.IconSize)
 	dc.SetColor(color.RGBA{0, 0, 0, 0})
 	dc.Clear()
 
 	utilization := state.FiveHour
 	col := colorForUtilization(utilization, thresholds)
 
-	s := float64(iconSize) / 64.0 // scale factor relative to base size 64
+	s := float64(opts.IconSize) / 64.0 // scale factor relative to base size 64
+	p := drawParams{
+		fontSize: opts.FontSize * s,
+		iconSize: opts.IconSize,
+		s:        s,
+		fontName: opts.FontName,
+		haloSize: opts.HaloSize * s,
+		showText: opts.ShowText,
+	}
 
 	if state.TokenExpired {
-		drawExpiredIcon(dc, iconSize, s, fontName)
+		drawExpiredIcon(dc, p)
 	} else if state.Error != "" {
-		drawErrorIcon(dc, iconSize, s)
+		drawErrorIcon(dc, p)
 	} else {
-		drawNormalIcon(dc, utilization, col, fontSize*s, iconSize, s, fontName, haloSize*s)
+		switch opts.Indicator {
+		case "bar":
+			drawBarIcon(dc, utilization, col, p)
+		case "bar-proj":
+			var projected *float64
+			var projCol color.RGBA
+			if state.FiveHourProjected != nil {
+				projected = state.FiveHourProjected
+				projCol = mutedColor(colorForUtilization(projected, thresholds))
+			}
+			drawBarProjIcon(dc, utilization, col, projected, projCol, p)
+		case "arc":
+			drawArcIcon(dc, utilization, col, p)
+		default:
+			drawNormalIcon(dc, utilization, col, p)
+		}
+		drawUtilizationText(dc, utilization, p)
 	}
 
 	return dc.Image()
 }
 
 // drawExpiredIcon draws an amber warning triangle with "!" for token expiry.
-func drawExpiredIcon(dc *gg.Context, iconSize int, s float64, fontName string) {
+func drawExpiredIcon(dc *gg.Context, p drawParams) {
 	amber := color.RGBA{255, 193, 7, 255}
-	center := float64(iconSize) / 2
-	margin := 4.0 * s
+	center := float64(p.iconSize) / 2
+	margin := 4.0 * p.s
 
 	// Triangle vertices: top-center, bottom-left, bottom-right
 	topX, topY := center, margin
-	botL, botR, botY := margin, float64(iconSize)-margin, float64(iconSize)-margin
+	botL, botR, botY := margin, float64(p.iconSize)-margin, float64(p.iconSize)-margin
 
 	// Filled triangle
 	dc.SetColor(amber)
@@ -147,14 +212,14 @@ func drawExpiredIcon(dc *gg.Context, iconSize int, s float64, fontName string) {
 
 	// "!" centered in the triangle, nudged down for visual weight.
 	// Black on amber — no halo needed for high contrast.
-	drawCenteredText(dc, "!", center, center+6*s, 28*s, 0, fontName,
+	drawCenteredText(dc, "!", center, center+6*p.s, 28*p.s, 0, p.fontName,
 		color.RGBA{0, 0, 0, 255}, color.RGBA{})
 }
 
 // drawErrorIcon draws a gray circle with a red X.
-func drawErrorIcon(dc *gg.Context, iconSize int, s float64) {
-	center := float64(iconSize) / 2
-	radius := float64(iconSize)/2 - 4*s
+func drawErrorIcon(dc *gg.Context, p drawParams) {
+	center := float64(p.iconSize) / 2
+	radius := float64(p.iconSize)/2 - 4*p.s
 
 	// Gray filled circle
 	dc.SetColor(color.RGBA{80, 80, 80, 255})
@@ -162,23 +227,23 @@ func drawErrorIcon(dc *gg.Context, iconSize int, s float64) {
 	dc.Fill()
 
 	// Red X
-	xOff := 16.0 * s
+	xOff := 16.0 * p.s
 	dc.SetColor(color.RGBA{220, 53, 69, 255})
-	dc.SetLineWidth(6 * s)
-	dc.DrawLine(xOff, xOff, float64(iconSize)-xOff, float64(iconSize)-xOff)
+	dc.SetLineWidth(6 * p.s)
+	dc.DrawLine(xOff, xOff, float64(p.iconSize)-xOff, float64(p.iconSize)-xOff)
 	dc.Stroke()
-	dc.DrawLine(xOff, float64(iconSize)-xOff, float64(iconSize)-xOff, xOff)
+	dc.DrawLine(xOff, float64(p.iconSize)-xOff, float64(p.iconSize)-xOff, xOff)
 	dc.Stroke()
 }
 
 // drawNormalIcon draws the ring outline, pie slice, and text.
-func drawNormalIcon(dc *gg.Context, utilization *float64, col color.RGBA, fontSize float64, iconSize int, s float64, fontName string, haloSize float64) {
-	center := float64(iconSize) / 2
-	outerRadius := float64(iconSize)/2 - 4*s
+func drawNormalIcon(dc *gg.Context, utilization *float64, col color.RGBA, p drawParams) {
+	center := float64(p.iconSize) / 2
+	outerRadius := float64(p.iconSize)/2 - 4*p.s
 
 	// Outer ring
 	dc.SetColor(col)
-	dc.SetLineWidth(4 * s)
+	dc.SetLineWidth(4 * p.s)
 	dc.DrawCircle(center, center, outerRadius)
 	dc.Stroke()
 
@@ -187,9 +252,9 @@ func drawNormalIcon(dc *gg.Context, utilization *float64, col color.RGBA, fontSi
 	}
 
 	// Pie slice
-	extent := *utilization / 100.0 * 2 * math.Pi
+	extent := clampFrac(*utilization) * 2 * math.Pi
 	if extent > 0 {
-		pieRadius := float64(iconSize)/2 - 8*s
+		pieRadius := float64(p.iconSize)/2 - 8*p.s
 		startAngle := -math.Pi / 2 // top
 		endAngle := startAngle + extent
 
@@ -200,10 +265,130 @@ func drawNormalIcon(dc *gg.Context, utilization *float64, col color.RGBA, fontSi
 		dc.LineTo(center, center)
 		dc.Fill()
 	}
+}
 
-	// Text
+// drawBarIcon draws a vertical filling bar indicator (bottom to top).
+func drawBarIcon(dc *gg.Context, utilization *float64, col color.RGBA, p drawParams) {
+	border := 2 * p.s
+	size := float64(p.iconSize)
+
+	// Border rectangle
+	dc.SetColor(col)
+	dc.SetLineWidth(border)
+	dc.DrawRectangle(border/2, border/2, size-border, size-border)
+	dc.Stroke()
+
+	if utilization == nil {
+		return
+	}
+
+	// Filled portion from bottom
+	innerMargin := border + p.s
+	innerW := size - 2*innerMargin
+	innerH := size - 2*innerMargin
+	fillH := innerH * clampFrac(*utilization)
+
+	if fillH > 0 {
+		dc.SetColor(col)
+		dc.DrawRectangle(innerMargin, innerMargin+innerH-fillH, innerW, fillH)
+		dc.Fill()
+	}
+}
+
+// drawArcIcon draws a progress ring (thick arc stroke filling clockwise from 12 o'clock).
+func drawArcIcon(dc *gg.Context, utilization *float64, col color.RGBA, p drawParams) {
+	center := float64(p.iconSize) / 2
+	strokeWidth := 6 * p.s
+	radius := float64(p.iconSize)/2 - strokeWidth/2 - 2*p.s
+
+	// Background track ring (dim gray)
+	dc.SetColor(color.RGBA{60, 60, 60, 255})
+	dc.SetLineWidth(strokeWidth)
+	dc.DrawCircle(center, center, radius)
+	dc.Stroke()
+
+	if utilization == nil {
+		return
+	}
+
+	// Foreground arc
+	extent := clampFrac(*utilization) * 2 * math.Pi
+	if extent > 0 {
+		startAngle := -math.Pi / 2 // 12 o'clock
+		endAngle := startAngle + extent
+
+		dc.SetColor(col)
+		dc.SetLineWidth(strokeWidth)
+		dc.DrawArc(center, center, radius, startAngle, endAngle)
+		dc.Stroke()
+	}
+}
+
+// mutedColor returns a desaturated version of the color by blending 50% toward
+// medium gray. This keeps the hue recognizable while being visually distinct
+// from the full-brightness variant, even on dark backgrounds.
+func mutedColor(c color.RGBA) color.RGBA {
+	return color.RGBA{
+		uint8((int(c.R) + 128) / 2),
+		uint8((int(c.G) + 128) / 2),
+		uint8((int(c.B) + 128) / 2),
+		c.A,
+	}
+}
+
+// drawBarProjIcon draws two side-by-side vertical bars: left = actual 5h consumption,
+// right = projected 5h consumption at window reset (muted colors).
+func drawBarProjIcon(dc *gg.Context, utilization *float64, col color.RGBA, projected *float64, projCol color.RGBA, p drawParams) {
+	border := 2 * p.s
+	size := float64(p.iconSize)
+	gap := 1 * p.s
+
+	// Border rectangle
+	dc.SetColor(col)
+	dc.SetLineWidth(border)
+	dc.DrawRectangle(border/2, border/2, size-border, size-border)
+	dc.Stroke()
+
+	if utilization == nil {
+		return
+	}
+
+	innerMargin := border + p.s
+	innerW := size - 2*innerMargin
+	innerH := size - 2*innerMargin
+
+	// Column widths: split inner area into two columns with a gap.
+	colW := (innerW - gap) / 2
+
+	// Left bar: actual 5h utilization.
+	fillH := innerH * clampFrac(*utilization)
+	if fillH > 0 {
+		dc.SetColor(col)
+		dc.DrawRectangle(innerMargin, innerMargin+innerH-fillH, colW, fillH)
+		dc.Fill()
+	}
+
+	// Right bar: projected utilization (muted color).
+	if projected != nil {
+		projFillH := innerH * clampFrac(*projected)
+		if projFillH > 0 {
+			rightX := innerMargin + colW + gap
+			dc.SetColor(projCol)
+			dc.DrawRectangle(rightX, innerMargin+innerH-projFillH, colW, projFillH)
+			dc.Fill()
+		}
+	}
+}
+
+// drawUtilizationText draws the utilization percentage centered on the icon.
+// Called once from renderIcon after the indicator shape has been drawn.
+func drawUtilizationText(dc *gg.Context, utilization *float64, p drawParams) {
+	if !p.showText || utilization == nil {
+		return
+	}
+	center := float64(p.iconSize) / 2
 	text := fmt.Sprintf("%d", int(*utilization))
-	drawCenteredText(dc, text, center, center, fontSize, haloSize, fontName,
+	drawCenteredText(dc, text, center, center, p.fontSize, p.haloSize, p.fontName,
 		color.RGBA{255, 255, 255, 255}, color.RGBA{0, 0, 0, 255})
 }
 

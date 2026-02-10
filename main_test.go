@@ -240,3 +240,117 @@ func TestApplyOverrides_ThresholdEqualSwaps(t *testing.T) {
 		t.Errorf("Equal thresholds should remain 70/70 after swap, got %f/%f", cfg.Thresholds.Warning, cfg.Thresholds.Critical)
 	}
 }
+
+func TestApplyOverrides_IndicatorFlag(t *testing.T) {
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{HaloSize: -1, Indicator: "bar"})
+	if cfg.Indicator != "bar" {
+		t.Errorf("Indicator = %q, want %q", cfg.Indicator, "bar")
+	}
+}
+
+func TestApplyOverrides_IndicatorEnvVar(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_INDICATOR", "arc")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, noOverrides)
+	if cfg.Indicator != "arc" {
+		t.Errorf("Indicator = %q, want %q", cfg.Indicator, "arc")
+	}
+}
+
+func TestApplyOverrides_IndicatorFlagOverridesEnv(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_INDICATOR", "arc")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{HaloSize: -1, Indicator: "bar"})
+	if cfg.Indicator != "bar" {
+		t.Errorf("Indicator = %q, want %q (flag should override env)", cfg.Indicator, "bar")
+	}
+}
+
+func TestApplyOverrides_IndicatorInvalidEnvIgnored(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_INDICATOR", "gauge")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, noOverrides)
+	if cfg.Indicator != "pie" {
+		t.Errorf("Indicator = %q, want %q (invalid env should be ignored)", cfg.Indicator, "pie")
+	}
+}
+
+func TestApplyOverrides_IndicatorInvalidFlagIgnored(t *testing.T) {
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{HaloSize: -1, Indicator: "unknown"})
+	if cfg.Indicator != "pie" {
+		t.Errorf("Indicator = %q, want %q (invalid flag should be ignored)", cfg.Indicator, "pie")
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+func TestApplyOverrides_ShowTextFlag(t *testing.T) {
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{HaloSize: -1, ShowText: boolPtr(false)})
+	if configShowText(cfg) != false {
+		t.Errorf("ShowText = %v, want false", configShowText(cfg))
+	}
+}
+
+func TestApplyOverrides_ShowTextEnvVar(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_SHOW_TEXT", "false")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, noOverrides)
+	if configShowText(cfg) != false {
+		t.Errorf("ShowText = %v, want false (env false)", configShowText(cfg))
+	}
+}
+
+func TestApplyOverrides_ShowTextEnvVar0(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_SHOW_TEXT", "0")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, noOverrides)
+	if configShowText(cfg) != false {
+		t.Errorf("ShowText = %v, want false (env 0)", configShowText(cfg))
+	}
+}
+
+func TestApplyOverrides_ShowTextEnvVarTrue(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_SHOW_TEXT", "true")
+	cfg := defaultConfig()
+	// Start with false to verify env sets it back to true.
+	cfg.ShowText = boolPtr(false)
+	applyOverrides(&cfg, noOverrides)
+	if configShowText(cfg) != true {
+		t.Errorf("ShowText = %v, want true (env true)", configShowText(cfg))
+	}
+}
+
+func TestApplyOverrides_ShowTextFlagOverridesEnv(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_SHOW_TEXT", "false")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{HaloSize: -1, ShowText: boolPtr(true)})
+	if configShowText(cfg) != true {
+		t.Errorf("ShowText = %v, want true (flag should override env)", configShowText(cfg))
+	}
+}
+
+func TestApplyOverrides_ShowTextInvalidEnvIgnored(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_SHOW_TEXT", "maybe")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, noOverrides)
+	if configShowText(cfg) != true {
+		t.Errorf("ShowText = %v, want true (invalid env should be ignored)", configShowText(cfg))
+	}
+}
+
+func TestConfigShowText_NilDefault(t *testing.T) {
+	cfg := Config{}
+	if configShowText(cfg) != true {
+		t.Errorf("configShowText(nil) = %v, want true", configShowText(cfg))
+	}
+}
+
+func TestConfigShowText_False(t *testing.T) {
+	cfg := Config{ShowText: boolPtr(false)}
+	if configShowText(cfg) != false {
+		t.Errorf("configShowText(false) = %v, want false", configShowText(cfg))
+	}
+}

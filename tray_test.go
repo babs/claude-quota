@@ -66,6 +66,44 @@ func TestBuildTooltip_WithLastUpdate(t *testing.T) {
 	}
 }
 
+func TestBuildTooltip_WithProjection(t *testing.T) {
+	v5 := 33.0
+	proj := 36.0
+	resets := time.Now().Add(23 * time.Minute)
+	state := QuotaState{
+		FiveHour:          &v5,
+		FiveHourResets:    &resets,
+		FiveHourProjected: &proj,
+	}
+	got := buildTooltip(state)
+	if !strings.Contains(got, "5h: 33%") {
+		t.Errorf("buildTooltip missing 5h line: %q", got)
+	}
+	if !strings.Contains(got, "\n  - projected ~36% at reset") {
+		t.Errorf("buildTooltip missing projection on separate line: %q", got)
+	}
+}
+
+func TestBuildTooltip_WithSaturation(t *testing.T) {
+	v5 := 80.0
+	proj := 400.0
+	resets := time.Now().Add(4 * time.Hour)
+	sat := time.Now().Add(15 * time.Minute)
+	state := QuotaState{
+		FiveHour:           &v5,
+		FiveHourResets:     &resets,
+		FiveHourProjected:  &proj,
+		FiveHourSaturation: &sat,
+	}
+	got := buildTooltip(state)
+	if !strings.Contains(got, "projected ~400% at reset") {
+		t.Errorf("buildTooltip missing uncapped projection: %q", got)
+	}
+	if !strings.Contains(got, "saturates in") {
+		t.Errorf("buildTooltip missing saturation line: %q", got)
+	}
+}
+
 func TestBuildTooltip_ErrorHidesQuota(t *testing.T) {
 	v := 42.0
 	state := QuotaState{
