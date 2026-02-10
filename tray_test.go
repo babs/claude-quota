@@ -79,7 +79,7 @@ func TestBuildTooltip_WithProjection(t *testing.T) {
 	if !strings.Contains(got, "5h: 33%") {
 		t.Errorf("buildTooltip missing 5h line: %q", got)
 	}
-	if !strings.Contains(got, "\n  - ~36% at reset") {
+	if !strings.Contains(got, "\n  - projected ~36% at reset") {
 		t.Errorf("buildTooltip missing projection on separate line: %q", got)
 	}
 }
@@ -96,7 +96,7 @@ func TestBuildTooltip_WithSaturation(t *testing.T) {
 		FiveHourSaturation: &sat,
 	}
 	got := buildTooltip(state)
-	if !strings.Contains(got, "~400% at reset") {
+	if !strings.Contains(got, "projected ~400% at reset") {
 		t.Errorf("buildTooltip missing uncapped projection: %q", got)
 	}
 	if !strings.Contains(got, "saturates in") {

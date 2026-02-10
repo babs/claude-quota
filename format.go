@@ -74,7 +74,7 @@ func formatProjectionLine(projected *float64) string {
 	if projected == nil {
 		return ""
 	}
-	return fmt.Sprintf("  - ~%.0f%% at reset", *projected)
+	return fmt.Sprintf("  - projected ~%.0f%% at reset", *projected)
 }
 
 // formatQuotaLine formats a single quota line with remaining time and date.

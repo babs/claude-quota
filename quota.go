@@ -20,6 +20,8 @@ type QuotaState struct {
 	FiveHourSaturation   *time.Time // projected time when 5h quota hits 100%
 	SevenDay             *float64
 	SevenDayResets       *time.Time
+	SevenDayProjected    *float64   // projected 7d utilization at window reset
+	SevenDaySaturation   *time.Time // projected time when 7d quota hits 100%
 	SevenDaySonnet       *float64
 	SevenDaySonnetResets *time.Time
 	LastUpdate           *time.Time
@@ -140,6 +142,19 @@ func (qc *QuotaClient) Fetch() bool {
 		)
 	}
 
+	// Compute 7d projection: same approach as 5h above.
+	if newState.SevenDay != nil && newState.SevenDayResets != nil {
+		newState.SevenDayProjected = computeProjection(
+			*newState.SevenDay, *newState.SevenDayResets, now, sevenDayWindow,
+		)
+	}
+	// Compute 7d saturation time when projected > 100%.
+	if newState.SevenDayProjected != nil && *newState.SevenDayProjected > 100 {
+		newState.SevenDaySaturation = computeSaturationTime(
+			*newState.SevenDay, *newState.SevenDayResets, now, sevenDayWindow,
+		)
+	}
+
 	qc.mu.Lock()
 	qc.state = newState
 	qc.mu.Unlock()
@@ -177,6 +192,10 @@ func parseBucket(bucket *usageBucket, util **float64, resets **time.Time) {
 // If Anthropic changes the window duration, this constant must be updated.
 const fiveHourWindow = 5 * time.Hour
 
+// sevenDayWindow is the assumed duration of the 7-day quota window.
+// Same caveat as fiveHourWindow: not derivable from the API.
+const sevenDayWindow = 7 * 24 * time.Hour
+
 // computeProjection estimates utilization at window reset by extrapolating the
 // average consumption rate over the elapsed portion of the window. Returns nil
 // when the window hasn't meaningfully started or has already ended.
@@ -196,7 +215,7 @@ func computeProjection(current float64, resetsAt time.Time, now time.Time, windo
 	return &projected
 }
 
-// computeSaturationTime estimates when 5h utilization will reach 100%, based on
+// computeSaturationTime estimates when utilization will reach 100%, based on
 // the average consumption rate over the elapsed portion of the window. Returns
 // nil when saturation won't occur before reset or inputs are invalid.
 func computeSaturationTime(current float64, resetsAt time.Time, now time.Time, windowDuration time.Duration) *time.Time {

@@ -18,14 +18,16 @@ type App struct {
 	uiMu   sync.Mutex    // serializes updateUI calls
 
 	// Menu items updated dynamically.
-	mFiveHour       *systray.MenuItem
-	mProjection     *systray.MenuItem
-	mSaturation     *systray.MenuItem
-	mSevenDay       *systray.MenuItem
-	mSevenDaySonnet *systray.MenuItem
-	mUpdated        *systray.MenuItem
-	mRefresh        *systray.MenuItem
-	mQuit           *systray.MenuItem
+	mFiveHour           *systray.MenuItem
+	mProjection         *systray.MenuItem
+	mSaturation         *systray.MenuItem
+	mSevenDay           *systray.MenuItem
+	mSevenDayProjection *systray.MenuItem
+	mSevenDaySaturation *systray.MenuItem
+	mSevenDaySonnet     *systray.MenuItem
+	mUpdated            *systray.MenuItem
+	mRefresh            *systray.MenuItem
+	mQuit               *systray.MenuItem
 }
 
 // NewApp creates an App from the given config and credentials.
@@ -69,6 +71,12 @@ func (a *App) onReady() {
 	a.mSaturation.Hide()
 	a.mSevenDay = systray.AddMenuItem("7d: --", "7-day quota")
 	a.mSevenDay.Disable()
+	a.mSevenDayProjection = systray.AddMenuItem("", "Projected 7d utilization at reset")
+	a.mSevenDayProjection.Disable()
+	a.mSevenDayProjection.Hide()
+	a.mSevenDaySaturation = systray.AddMenuItem("", "Projected 7d saturation time")
+	a.mSevenDaySaturation.Disable()
+	a.mSevenDaySaturation.Hide()
 	a.mSevenDaySonnet = systray.AddMenuItem("Sonnet 7d: --", "7-day Sonnet quota")
 	a.mSevenDaySonnet.Disable()
 
@@ -199,6 +207,23 @@ func (a *App) updateUI() {
 		a.mSaturation.Hide()
 	}
 	a.mSevenDay.SetTitle(formatQuotaLine("7d", state.SevenDay, state.SevenDayResets))
+	if state.SevenDay != nil {
+		if projLine := formatProjectionLine(state.SevenDayProjected); projLine != "" {
+			a.mSevenDayProjection.SetTitle(projLine)
+			a.mSevenDayProjection.Show()
+		} else {
+			a.mSevenDayProjection.Hide()
+		}
+		if satLine := formatSaturationLine(state.SevenDaySaturation); satLine != "" {
+			a.mSevenDaySaturation.SetTitle(satLine)
+			a.mSevenDaySaturation.Show()
+		} else {
+			a.mSevenDaySaturation.Hide()
+		}
+	} else {
+		a.mSevenDayProjection.Hide()
+		a.mSevenDaySaturation.Hide()
+	}
 	a.mSevenDaySonnet.SetTitle(formatQuotaLine("Sonnet 7d", state.SevenDaySonnet, state.SevenDaySonnetResets))
 
 	a.mUpdated.SetTitle(formatUpdatedAgo(state.LastUpdate))
@@ -222,6 +247,12 @@ func buildTooltip(state QuotaState) string {
 		}
 		if state.SevenDay != nil {
 			lines += "\n" + formatQuotaLine("7d", state.SevenDay, state.SevenDayResets)
+			if state.SevenDayProjected != nil {
+				lines += "\n" + formatProjectionLine(state.SevenDayProjected)
+			}
+			if state.SevenDaySaturation != nil {
+				lines += "\n" + formatSaturationLine(state.SevenDaySaturation)
+			}
 		}
 		if state.SevenDaySonnet != nil {
 			lines += "\n" + formatQuotaLine("Sonnet 7d", state.SevenDaySonnet, state.SevenDaySonnetResets)

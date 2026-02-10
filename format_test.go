@@ -146,7 +146,7 @@ func TestFormatProjectionLine_Nil(t *testing.T) {
 func TestFormatProjectionLine_Value(t *testing.T) {
 	proj := 35.7
 	got := formatProjectionLine(&proj)
-	if got != "  - ~36% at reset" {
-		t.Errorf("formatProjectionLine(35.7) = %q, want %q", got, "  - ~36% at reset")
+	if got != "  - projected ~36% at reset" {
+		t.Errorf("formatProjectionLine(35.7) = %q, want %q", got, "  - projected ~36% at reset")
 	}
 }

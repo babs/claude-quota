@@ -1,3 +1,4 @@
 dist/
 claude-quota
 claude-quota.exe
+coverage*.out

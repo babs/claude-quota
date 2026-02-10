@@ -214,6 +214,10 @@ func TestFetch_Success(t *testing.T) {
 	if state.FiveHourProjected != nil {
 		t.Errorf("FiveHourProjected should be nil for past reset, got %f", *state.FiveHourProjected)
 	}
+	// No resets_at for 7d, so projection should be nil.
+	if state.SevenDayProjected != nil {
+		t.Errorf("SevenDayProjected should be nil without resets_at, got %f", *state.SevenDayProjected)
+	}
 }
 
 func TestFetch_ComputesProjection(t *testing.T) {
@@ -523,5 +527,126 @@ func TestComputeSaturationTime_WindowNotStarted(t *testing.T) {
 	sat := computeSaturationTime(80, resetsAt, now, fiveHourWindow)
 	if sat != nil {
 		t.Errorf("expected nil when window hasn't started, got %v", sat)
+	}
+}
+
+func TestComputeProjection_SevenDay_Normal(t *testing.T) {
+	// 20% consumed, 3 days remaining in 7d window
+	// elapsed = 7d - 3d = 4d, projected = 20 * 7/4 = 35
+	now := time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)
+	resetsAt := now.Add(3 * 24 * time.Hour)
+	proj := computeProjection(20, resetsAt, now, sevenDayWindow)
+	if proj == nil {
+		t.Fatal("expected non-nil projection")
+	}
+	if *proj != 35 {
+		t.Errorf("projected = %f, want 35", *proj)
+	}
+}
+
+func TestComputeProjection_SevenDay_HighUsage(t *testing.T) {
+	// 50% consumed, 6 days remaining → elapsed = 1d → projected = 50*7/1 = 350
+	now := time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)
+	resetsAt := now.Add(6 * 24 * time.Hour)
+	proj := computeProjection(50, resetsAt, now, sevenDayWindow)
+	if proj == nil {
+		t.Fatal("expected non-nil projection")
+	}
+	if *proj != 350 {
+		t.Errorf("projected = %f, want 350", *proj)
+	}
+}
+
+func TestComputeSaturationTime_SevenDay_Normal(t *testing.T) {
+	// 80% consumed, 6 days remaining in 7d window
+	// elapsed = 1d, rate = 80/1d, timeToSaturation = 20/80 * 1d = 6h
+	now := time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)
+	resetsAt := now.Add(6 * 24 * time.Hour)
+	sat := computeSaturationTime(80, resetsAt, now, sevenDayWindow)
+	if sat == nil {
+		t.Fatal("expected non-nil saturation time")
+	}
+	expected := now.Add(6 * time.Hour)
+	diff := sat.Sub(expected)
+	if diff < -time.Second || diff > time.Second {
+		t.Errorf("saturation = %v, want ~%v (diff=%v)", sat, expected, diff)
+	}
+}
+
+func TestComputeSaturationTime_SevenDay_NoSaturation(t *testing.T) {
+	// 5% consumed, 1 day remaining → elapsed = 6d → projected = 5*7/6 ≈ 5.83% → no saturation
+	now := time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)
+	resetsAt := now.Add(1 * 24 * time.Hour)
+	sat := computeSaturationTime(5, resetsAt, now, sevenDayWindow)
+	if sat != nil {
+		t.Errorf("expected nil for projection < 100%%, got %v", sat)
+	}
+}
+
+func TestFetch_ComputesSevenDayProjection(t *testing.T) {
+	// 7d reset 3 days from now → elapsed = 4d → projected = 20 * 7/4 = 35
+	resetsAt := time.Now().UTC().Add(3 * 24 * time.Hour).Format(time.RFC3339)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		w.Write([]byte(`{
+			"five_hour": {"utilization": 10.0},
+			"seven_day": {"utilization": 20.0, "resets_at": "` + resetsAt + `"}
+		}`))
+	}))
+	defer srv.Close()
+
+	origURL := usageURL
+	defer func() { usageURL = origURL }()
+	usageURL = srv.URL
+
+	qc := newTestQuotaClient("tok", time.Now().UnixMilli()+300_000, srv.Client())
+	if !qc.Fetch() {
+		t.Fatal("Fetch() returned false")
+	}
+
+	state := qc.State()
+	if state.SevenDayProjected == nil {
+		t.Fatal("SevenDayProjected should be set")
+	}
+	if *state.SevenDayProjected < 34 || *state.SevenDayProjected > 36 {
+		t.Errorf("SevenDayProjected = %f, want ~35", *state.SevenDayProjected)
+	}
+}
+
+func TestFetch_ComputesSevenDaySaturation(t *testing.T) {
+	// 80% consumed with 6 days remaining → projected = 80*7/1 = 560% (>100)
+	// → saturation = now + (100-80)/80 * 1d = now + 6h
+	resetsAt := time.Now().UTC().Add(6 * 24 * time.Hour).Format(time.RFC3339)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		w.Write([]byte(`{
+			"five_hour": {"utilization": 10.0},
+			"seven_day": {"utilization": 80.0, "resets_at": "` + resetsAt + `"}
+		}`))
+	}))
+	defer srv.Close()
+
+	origURL := usageURL
+	defer func() { usageURL = origURL }()
+	usageURL = srv.URL
+
+	qc := newTestQuotaClient("tok", time.Now().UnixMilli()+300_000, srv.Client())
+	if !qc.Fetch() {
+		t.Fatal("Fetch() returned false")
+	}
+
+	state := qc.State()
+	if state.SevenDayProjected == nil {
+		t.Fatal("SevenDayProjected should be set")
+	}
+	if *state.SevenDayProjected < 500 || *state.SevenDayProjected > 600 {
+		t.Errorf("SevenDayProjected = %f, want ~560", *state.SevenDayProjected)
+	}
+	if state.SevenDaySaturation == nil {
+		t.Fatal("SevenDaySaturation should be set when projected > 100%%")
+	}
+	untilSat := time.Until(*state.SevenDaySaturation)
+	if untilSat < 5*time.Hour || untilSat > 7*time.Hour {
+		t.Errorf("SevenDaySaturation in %v, want ~6h", untilSat)
 	}
 }
