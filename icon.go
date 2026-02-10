@@ -186,6 +186,7 @@ func renderIcon(state QuotaState, thresholds Thresholds, opts RenderOptions) ima
 		default:
 			drawNormalIcon(dc, utilization, col, p)
 		}
+		drawUtilizationText(dc, utilization, p)
 	}
 
 	return dc.Image()
@@ -264,18 +265,10 @@ func drawNormalIcon(dc *gg.Context, utilization *float64, col color.RGBA, p draw
 		dc.LineTo(center, center)
 		dc.Fill()
 	}
-
-	// Text
-	if p.showText {
-		text := fmt.Sprintf("%d", int(*utilization))
-		drawCenteredText(dc, text, center, center, p.fontSize, p.haloSize, p.fontName,
-			color.RGBA{255, 255, 255, 255}, color.RGBA{0, 0, 0, 255})
-	}
 }
 
 // drawBarIcon draws a vertical filling bar indicator (bottom to top).
 func drawBarIcon(dc *gg.Context, utilization *float64, col color.RGBA, p drawParams) {
-	center := float64(p.iconSize) / 2
 	border := 2 * p.s
 	size := float64(p.iconSize)
 
@@ -299,13 +292,6 @@ func drawBarIcon(dc *gg.Context, utilization *float64, col color.RGBA, p drawPar
 		dc.SetColor(col)
 		dc.DrawRectangle(innerMargin, innerMargin+innerH-fillH, innerW, fillH)
 		dc.Fill()
-	}
-
-	// Text
-	if p.showText {
-		text := fmt.Sprintf("%d", int(*utilization))
-		drawCenteredText(dc, text, center, center, p.fontSize, p.haloSize, p.fontName,
-			color.RGBA{255, 255, 255, 255}, color.RGBA{0, 0, 0, 255})
 	}
 }
 
@@ -336,13 +322,6 @@ func drawArcIcon(dc *gg.Context, utilization *float64, col color.RGBA, p drawPar
 		dc.DrawArc(center, center, radius, startAngle, endAngle)
 		dc.Stroke()
 	}
-
-	// Text
-	if p.showText {
-		text := fmt.Sprintf("%d", int(*utilization))
-		drawCenteredText(dc, text, center, center, p.fontSize, p.haloSize, p.fontName,
-			color.RGBA{255, 255, 255, 255}, color.RGBA{0, 0, 0, 255})
-	}
 }
 
 // mutedColor returns a desaturated version of the color by blending 50% toward
@@ -360,7 +339,6 @@ func mutedColor(c color.RGBA) color.RGBA {
 // drawBarProjIcon draws two side-by-side vertical bars: left = actual 5h consumption,
 // right = projected 5h consumption at window reset (muted colors).
 func drawBarProjIcon(dc *gg.Context, utilization *float64, col color.RGBA, projected *float64, projCol color.RGBA, p drawParams) {
-	center := float64(p.iconSize) / 2
 	border := 2 * p.s
 	size := float64(p.iconSize)
 	gap := 1 * p.s
@@ -400,13 +378,18 @@ func drawBarProjIcon(dc *gg.Context, utilization *float64, col color.RGBA, proje
 			dc.Fill()
 		}
 	}
+}
 
-	// Text
-	if p.showText {
-		text := fmt.Sprintf("%d", int(*utilization))
-		drawCenteredText(dc, text, center, center, p.fontSize, p.haloSize, p.fontName,
-			color.RGBA{255, 255, 255, 255}, color.RGBA{0, 0, 0, 255})
+// drawUtilizationText draws the utilization percentage centered on the icon.
+// Called once from renderIcon after the indicator shape has been drawn.
+func drawUtilizationText(dc *gg.Context, utilization *float64, p drawParams) {
+	if !p.showText || utilization == nil {
+		return
 	}
+	center := float64(p.iconSize) / 2
+	text := fmt.Sprintf("%d", int(*utilization))
+	drawCenteredText(dc, text, center, center, p.fontSize, p.haloSize, p.fontName,
+		color.RGBA{255, 255, 255, 255}, color.RGBA{0, 0, 0, 255})
 }
 
 // drawCenteredText draws text centered at (cx, cy) with a halo shadow for contrast.
