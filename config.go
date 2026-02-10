@@ -16,6 +16,8 @@ type Config struct {
 	FontName            string     `json:"font_name"`
 	HaloSize            float64    `json:"halo_size"`
 	IconSize            int        `json:"icon_size"`
+	Indicator           string     `json:"indicator"`
+	ShowText            *bool      `json:"show_text"`
 	Thresholds          Thresholds `json:"thresholds"`
 }
 
@@ -37,17 +39,28 @@ func init() {
 
 // defaultConfig returns a Config with default values.
 func defaultConfig() Config {
+	showText := true
 	return Config{
 		PollIntervalSeconds: 300,
 		FontSize:            34,
 		FontName:            "bold",
 		HaloSize:            2,
 		IconSize:            64,
+		Indicator:           "pie",
+		ShowText:            &showText,
 		Thresholds: Thresholds{
 			Warning:  60,
 			Critical: 85,
 		},
 	}
+}
+
+// configShowText dereferences ShowText with a default of true.
+func configShowText(cfg Config) bool {
+	if cfg.ShowText == nil {
+		return true
+	}
+	return *cfg.ShowText
 }
 
 // loadConfig loads config from disk, creating a default if it doesn't exist.
@@ -96,6 +109,15 @@ func loadConfig() Config {
 			log.Printf("Unknown font_name %q in config, using default %q", cfg.FontName, defaults.FontName)
 		}
 		cfg.FontName = defaults.FontName
+	}
+	if cfg.Indicator == "" || !ValidIndicatorName(cfg.Indicator) {
+		if cfg.Indicator != "" {
+			log.Printf("Unknown indicator %q in config, using default %q", cfg.Indicator, defaults.Indicator)
+		}
+		cfg.Indicator = defaults.Indicator
+	}
+	if cfg.ShowText == nil {
+		cfg.ShowText = defaults.ShowText
 	}
 	if cfg.Thresholds.Warning <= 0 || cfg.Thresholds.Warning > 100 {
 		log.Printf("Invalid thresholds.warning %v in config, using default %v", cfg.Thresholds.Warning, defaults.Thresholds.Warning)

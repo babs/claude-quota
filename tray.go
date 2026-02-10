@@ -19,6 +19,8 @@ type App struct {
 
 	// Menu items updated dynamically.
 	mFiveHour       *systray.MenuItem
+	mProjection     *systray.MenuItem
+	mSaturation     *systray.MenuItem
 	mSevenDay       *systray.MenuItem
 	mSevenDaySonnet *systray.MenuItem
 	mUpdated        *systray.MenuItem
@@ -59,6 +61,12 @@ func (a *App) onReady() {
 	// Create menu items.
 	a.mFiveHour = systray.AddMenuItem("5h: --", "5-hour quota")
 	a.mFiveHour.Disable()
+	a.mProjection = systray.AddMenuItem("", "Projected utilization at reset")
+	a.mProjection.Disable()
+	a.mProjection.Hide()
+	a.mSaturation = systray.AddMenuItem("", "Projected saturation time")
+	a.mSaturation.Disable()
+	a.mSaturation.Hide()
 	a.mSevenDay = systray.AddMenuItem("7d: --", "7-day quota")
 	a.mSevenDay.Disable()
 	a.mSevenDaySonnet = systray.AddMenuItem("Sonnet 7d: --", "7-day Sonnet quota")
@@ -153,7 +161,14 @@ func (a *App) updateUI() {
 	state := a.quota.State()
 
 	// Update icon.
-	img := renderIcon(state, a.config.Thresholds, a.config.FontSize, a.config.IconSize, a.config.FontName, a.config.HaloSize)
+	img := renderIcon(state, a.config.Thresholds, RenderOptions{
+		FontSize:  a.config.FontSize,
+		IconSize:  a.config.IconSize,
+		FontName:  a.config.FontName,
+		HaloSize:  a.config.HaloSize,
+		Indicator: a.config.Indicator,
+		ShowText:  configShowText(a.config),
+	})
 	iconData, err := iconToBytes(img)
 	if err != nil {
 		log.Printf("Icon encode error: %v", err)
@@ -166,6 +181,23 @@ func (a *App) updateUI() {
 
 	// Update menu items.
 	a.mFiveHour.SetTitle(formatQuotaLine("5h", state.FiveHour, state.FiveHourResets))
+	if state.FiveHour != nil {
+		if projLine := formatProjectionLine(state.FiveHourProjected); projLine != "" {
+			a.mProjection.SetTitle(projLine)
+			a.mProjection.Show()
+		} else {
+			a.mProjection.Hide()
+		}
+		if satLine := formatSaturationLine(state.FiveHourSaturation); satLine != "" {
+			a.mSaturation.SetTitle(satLine)
+			a.mSaturation.Show()
+		} else {
+			a.mSaturation.Hide()
+		}
+	} else {
+		a.mProjection.Hide()
+		a.mSaturation.Hide()
+	}
 	a.mSevenDay.SetTitle(formatQuotaLine("7d", state.SevenDay, state.SevenDayResets))
 	a.mSevenDaySonnet.SetTitle(formatQuotaLine("Sonnet 7d", state.SevenDaySonnet, state.SevenDaySonnetResets))
 
@@ -181,6 +213,12 @@ func buildTooltip(state QuotaState) string {
 	} else {
 		if state.FiveHour != nil {
 			lines += "\n" + formatQuotaLine("5h", state.FiveHour, state.FiveHourResets)
+			if state.FiveHourProjected != nil {
+				lines += "\n" + formatProjectionLine(state.FiveHourProjected)
+			}
+			if state.FiveHourSaturation != nil {
+				lines += "\n" + formatSaturationLine(state.FiveHourSaturation)
+			}
 		}
 		if state.SevenDay != nil {
 			lines += "\n" + formatQuotaLine("7d", state.SevenDay, state.SevenDayResets)

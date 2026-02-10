@@ -210,6 +210,80 @@ func TestFetch_Success(t *testing.T) {
 	if state.LastUpdate == nil {
 		t.Error("LastUpdate should be set")
 	}
+	// Reset time is in the past (2026-02-06), so projection should be nil.
+	if state.FiveHourProjected != nil {
+		t.Errorf("FiveHourProjected should be nil for past reset, got %f", *state.FiveHourProjected)
+	}
+}
+
+func TestFetch_ComputesProjection(t *testing.T) {
+	// Use a reset time 1h in the future so the projection pipeline runs.
+	resetsAt := time.Now().UTC().Add(1 * time.Hour).Format(time.RFC3339)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		w.Write([]byte(`{
+			"five_hour": {"utilization": 50.0, "resets_at": "` + resetsAt + `"},
+			"seven_day": {"utilization": 10.0}
+		}`))
+	}))
+	defer srv.Close()
+
+	origURL := usageURL
+	defer func() { usageURL = origURL }()
+	usageURL = srv.URL
+
+	qc := newTestQuotaClient("tok", time.Now().UnixMilli()+300_000, srv.Client())
+	if !qc.Fetch() {
+		t.Fatal("Fetch() returned false")
+	}
+
+	state := qc.State()
+	if state.FiveHourProjected == nil {
+		t.Fatal("FiveHourProjected should be set for future reset with elapsed time")
+	}
+	// 50% consumed, 1h left in 5h window → elapsed=4h → projected = 50 * 5/4 = 62.5
+	if *state.FiveHourProjected < 60 || *state.FiveHourProjected > 65 {
+		t.Errorf("FiveHourProjected = %f, want ~62.5", *state.FiveHourProjected)
+	}
+}
+
+func TestFetch_ComputesSaturation(t *testing.T) {
+	// 80% consumed with 4h remaining → projected = 80*5/1 = 400% (>100)
+	// → saturation = now + (100-80)/80 * 1h = now + 15min
+	resetsAt := time.Now().UTC().Add(4 * time.Hour).Format(time.RFC3339)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		w.Write([]byte(`{
+			"five_hour": {"utilization": 80.0, "resets_at": "` + resetsAt + `"},
+			"seven_day": {"utilization": 10.0}
+		}`))
+	}))
+	defer srv.Close()
+
+	origURL := usageURL
+	defer func() { usageURL = origURL }()
+	usageURL = srv.URL
+
+	qc := newTestQuotaClient("tok", time.Now().UnixMilli()+300_000, srv.Client())
+	if !qc.Fetch() {
+		t.Fatal("Fetch() returned false")
+	}
+
+	state := qc.State()
+	if state.FiveHourProjected == nil {
+		t.Fatal("FiveHourProjected should be set")
+	}
+	if *state.FiveHourProjected < 350 || *state.FiveHourProjected > 450 {
+		t.Errorf("FiveHourProjected = %f, want ~400", *state.FiveHourProjected)
+	}
+	if state.FiveHourSaturation == nil {
+		t.Fatal("FiveHourSaturation should be set when projected > 100%%")
+	}
+	// Saturation should be ~15min from now.
+	untilSat := time.Until(*state.FiveHourSaturation)
+	if untilSat < 14*time.Minute || untilSat > 16*time.Minute {
+		t.Errorf("FiveHourSaturation in %v, want ~15m", untilSat)
+	}
 }
 
 func TestFetch_HTTP401(t *testing.T) {
@@ -312,5 +386,142 @@ func TestFetch_ResetsStaleState(t *testing.T) {
 	}
 	if state.TokenExpired {
 		t.Error("TokenExpired should be false after non-token error")
+	}
+}
+
+func TestComputeProjection_Normal(t *testing.T) {
+	// 33% consumed, 23 min remaining in 5h window
+	// elapsed = 5h - 23m = 4h37m = 277 min
+	// projected = 33 * 300/277 ≈ 35.74
+	now := time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)
+	resetsAt := now.Add(23 * time.Minute)
+	proj := computeProjection(33, resetsAt, now, fiveHourWindow)
+	if proj == nil {
+		t.Fatal("expected non-nil projection")
+	}
+	// 33 * 300 / 277 ≈ 35.74
+	if *proj < 35.5 || *proj > 36.0 {
+		t.Errorf("projected = %f, want ~35.74", *proj)
+	}
+}
+
+func TestComputeProjection_HighUsageUncapped(t *testing.T) {
+	// 80% consumed with 4h remaining in 5h window → projected way over 100
+	now := time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)
+	resetsAt := now.Add(4 * time.Hour)
+	// elapsed = 1h, projected = 80 * 5/1 = 400 → no longer capped
+	proj := computeProjection(80, resetsAt, now, fiveHourWindow)
+	if proj == nil {
+		t.Fatal("expected non-nil projection")
+	}
+	if *proj != 400 {
+		t.Errorf("projected = %f, want 400 (uncapped)", *proj)
+	}
+}
+
+func TestComputeProjection_MostWindowElapsed(t *testing.T) {
+	// 50% consumed, 30min remaining in 5h window
+	// elapsed = 4h30m = 270min, projected = 50 * 300/270 ≈ 55.56
+	now := time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)
+	resetsAt := now.Add(30 * time.Minute)
+	proj := computeProjection(50, resetsAt, now, fiveHourWindow)
+	if proj == nil {
+		t.Fatal("expected non-nil projection")
+	}
+	if *proj < 55.0 || *proj > 56.0 {
+		t.Errorf("projected = %f, want ~55.56", *proj)
+	}
+}
+
+func TestComputeProjection_ZeroCurrent(t *testing.T) {
+	now := time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)
+	resetsAt := now.Add(2 * time.Hour)
+	proj := computeProjection(0, resetsAt, now, fiveHourWindow)
+	if proj != nil {
+		t.Errorf("expected nil for zero current, got %f", *proj)
+	}
+}
+
+func TestComputeProjection_PastReset(t *testing.T) {
+	now := time.Date(2026, 2, 10, 15, 0, 0, 0, time.UTC)
+	resetsAt := time.Date(2026, 2, 10, 14, 0, 0, 0, time.UTC) // already past
+	proj := computeProjection(40, resetsAt, now, fiveHourWindow)
+	if proj != nil {
+		t.Errorf("expected nil for past reset time, got %f", *proj)
+	}
+}
+
+func TestComputeProjection_ResetEqualsNow(t *testing.T) {
+	now := time.Date(2026, 2, 10, 14, 0, 0, 0, time.UTC)
+	resetsAt := now
+	proj := computeProjection(40, resetsAt, now, fiveHourWindow)
+	if proj != nil {
+		t.Errorf("expected nil when reset equals now, got %f", *proj)
+	}
+}
+
+func TestComputeProjection_WindowNotStarted(t *testing.T) {
+	// resetsAt is 5h+ away, meaning window hasn't started yet (timeElapsed <= 0)
+	now := time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)
+	resetsAt := now.Add(6 * time.Hour) // more than window duration away
+	proj := computeProjection(10, resetsAt, now, fiveHourWindow)
+	if proj != nil {
+		t.Errorf("expected nil when window hasn't started, got %f", *proj)
+	}
+}
+
+func TestComputeSaturationTime_Normal(t *testing.T) {
+	// 80% consumed, 4h remaining in 5h window
+	// elapsed = 1h, rate = 80/1h, timeToSaturation = 20/80 * 1h = 15min
+	// saturation = now + 15min, reset = now + 4h → before reset ✓
+	now := time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)
+	resetsAt := now.Add(4 * time.Hour)
+	sat := computeSaturationTime(80, resetsAt, now, fiveHourWindow)
+	if sat == nil {
+		t.Fatal("expected non-nil saturation time")
+	}
+	// timeToSaturation = (100-80)/80 * 1h = 0.25h = 15min
+	expected := now.Add(15 * time.Minute)
+	diff := sat.Sub(expected)
+	if diff < -time.Second || diff > time.Second {
+		t.Errorf("saturation = %v, want ~%v (diff=%v)", sat, expected, diff)
+	}
+}
+
+func TestComputeSaturationTime_NoSaturation(t *testing.T) {
+	// 10% consumed, 2h remaining → projected = 10 * 5/3 ≈ 16.67% → below 100%
+	// saturation time would be past reset → nil
+	now := time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)
+	resetsAt := now.Add(2 * time.Hour)
+	sat := computeSaturationTime(10, resetsAt, now, fiveHourWindow)
+	if sat != nil {
+		t.Errorf("expected nil for projection < 100%%, got %v", sat)
+	}
+}
+
+func TestComputeSaturationTime_AlreadySaturated(t *testing.T) {
+	now := time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)
+	resetsAt := now.Add(1 * time.Hour)
+	sat := computeSaturationTime(100, resetsAt, now, fiveHourWindow)
+	if sat != nil {
+		t.Errorf("expected nil for current >= 100, got %v", sat)
+	}
+}
+
+func TestComputeSaturationTime_PastReset(t *testing.T) {
+	now := time.Date(2026, 2, 10, 15, 0, 0, 0, time.UTC)
+	resetsAt := time.Date(2026, 2, 10, 14, 0, 0, 0, time.UTC)
+	sat := computeSaturationTime(80, resetsAt, now, fiveHourWindow)
+	if sat != nil {
+		t.Errorf("expected nil for past reset, got %v", sat)
+	}
+}
+
+func TestComputeSaturationTime_WindowNotStarted(t *testing.T) {
+	now := time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)
+	resetsAt := now.Add(6 * time.Hour)
+	sat := computeSaturationTime(80, resetsAt, now, fiveHourWindow)
+	if sat != nil {
+		t.Errorf("expected nil when window hasn't started, got %v", sat)
 	}
 }

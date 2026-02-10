@@ -45,6 +45,8 @@ func main() {
 	iconSize := flag.Int("icon-size", 0, "icon size in pixels (env: CLAUDE_QUOTA_ICON_SIZE)")
 	warningThreshold := flag.Float64("warning-threshold", 0, "warning utilization threshold in % (env: CLAUDE_QUOTA_WARNING_THRESHOLD)")
 	criticalThreshold := flag.Float64("critical-threshold", 0, "critical utilization threshold in % (env: CLAUDE_QUOTA_CRITICAL_THRESHOLD)")
+	indicator := flag.String("indicator", "", "indicator type: pie, bar, arc, bar-proj (env: CLAUDE_QUOTA_INDICATOR)")
+	showText := flag.Bool("show-text", true, "show percentage text on icon (env: CLAUDE_QUOTA_SHOW_TEXT)")
 	claudeHome := flag.String("claude-home", "", "home directory for Claude credentials (env: CLAUDE_QUOTA_CLAUDE_HOME)")
 	flag.Usage = func() {
 		fmt.Print(versionStringLong())
@@ -101,12 +103,24 @@ func main() {
 	fmt.Printf("Credentials: %s\n", credentialsPath)
 	fmt.Printf("Config: %s\n", configPath)
 
+	// Only pass ShowText when the user explicitly set -show-text.
+	// flag.Bool defaults to true, so we can't distinguish "not set" from
+	// "-show-text=true" without flag.Visit.
+	var showTextOverride *bool
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "show-text" {
+			showTextOverride = showText
+		}
+	})
+
 	applyOverrides(&cfg, overrides{
 		PollInterval:      *pollInterval,
 		FontSize:          *fontSize,
 		FontName:          *fontName,
 		HaloSize:          *haloSize,
 		IconSize:          *iconSize,
+		Indicator:         *indicator,
+		ShowText:          showTextOverride,
 		WarningThreshold:  *warningThreshold,
 		CriticalThreshold: *criticalThreshold,
 	})
@@ -141,6 +155,8 @@ type overrides struct {
 	FontName          string
 	HaloSize          float64
 	IconSize          int
+	Indicator         string
+	ShowText          *bool
 	WarningThreshold  float64
 	CriticalThreshold float64
 }
@@ -204,6 +220,37 @@ func applyOverrides(cfg *Config, o overrides) {
 	}
 	if o.IconSize > 0 {
 		cfg.IconSize = o.IconSize
+	}
+
+	if v := os.Getenv("CLAUDE_QUOTA_INDICATOR"); v != "" {
+		if !ValidIndicatorName(v) {
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_INDICATOR=%q", v)
+		} else {
+			cfg.Indicator = v
+		}
+	}
+	if o.Indicator != "" {
+		if !ValidIndicatorName(o.Indicator) {
+			log.Printf("Ignoring invalid -indicator=%q", o.Indicator)
+		} else {
+			cfg.Indicator = o.Indicator
+		}
+	}
+
+	if v := os.Getenv("CLAUDE_QUOTA_SHOW_TEXT"); v != "" {
+		switch v {
+		case "true", "1":
+			b := true
+			cfg.ShowText = &b
+		case "false", "0":
+			b := false
+			cfg.ShowText = &b
+		default:
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_SHOW_TEXT=%q", v)
+		}
+	}
+	if o.ShowText != nil {
+		cfg.ShowText = o.ShowText
 	}
 
 	if v := os.Getenv("CLAUDE_QUOTA_WARNING_THRESHOLD"); v != "" {
