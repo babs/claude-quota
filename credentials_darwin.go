@@ -36,6 +36,10 @@ func (oc *OAuthCredentials) load() error {
 	return nil
 }
 
+// credentialsPreCheck is a no-op on macOS: credentials may live in the
+// Keychain without a file on disk, so NewOAuthCredentials() handles both.
+func credentialsPreCheck() {}
+
 // loadFromKeychain retrieves OAuth credentials stored by Claude Code in the macOS Keychain.
 // The account is the current OS username; the password is a JSON blob with the full
 // credentials structure: {"claudeAiOauth": {"accessToken": "...", "expiresAt": ..., ...}}
