@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
 	"log"
@@ -9,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"time"
 )
@@ -83,21 +81,7 @@ func main() {
 	fmt.Println("and may violate the Terms of Service. Use at your own risk.")
 	fmt.Println()
 
-	// Check credentials exist.
-	if _, err := os.Stat(credentialsPath); os.IsNotExist(err) {
-		fmt.Println("Claude Code credentials not found.")
-		fmt.Printf("Expected: %s\n", credentialsPath)
-		fmt.Println("\nRun 'claude login' to authenticate Claude Code first.")
-		if runtime.GOOS == "windows" {
-			fmt.Println("\nIf Claude Code is installed in WSL, use -claude-home to point to")
-			fmt.Println(`the WSL home directory, e.g.:`)
-			fmt.Println(`  claude-quota -claude-home \\wsl$\<distro>\home\<username>`)
-			fmt.Println(`Run "wsl -l -q" to list available WSL distributions.`)
-			fmt.Print("\nPress enter to continue...")
-			bufio.NewReader(os.Stdin).ReadBytes('\n')
-		}
-		os.Exit(1)
-	}
+	credentialsPreCheck()
 
 	fmt.Println(versionString())
 	fmt.Printf("Credentials: %s\n", credentialsPath)
