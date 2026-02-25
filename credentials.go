@@ -48,8 +48,8 @@ func NewOAuthCredentials() (*OAuthCredentials, error) {
 	return oc, nil
 }
 
-// load reads credentials from ~/.claude/.credentials.json.
-func (oc *OAuthCredentials) load() error {
+// loadFromFile reads credentials from ~/.claude/.credentials.json.
+func (oc *OAuthCredentials) loadFromFile() error {
 	data, err := os.ReadFile(credentialsPath)
 	if err != nil {
 		return fmt.Errorf("cannot read Claude credentials from %s: %w\nRun 'claude login' to authenticate Claude Code first", credentialsPath, err)

@@ -84,19 +84,23 @@ func main() {
 	fmt.Println()
 
 	// Check credentials exist.
-	if _, err := os.Stat(credentialsPath); os.IsNotExist(err) {
-		fmt.Println("Claude Code credentials not found.")
-		fmt.Printf("Expected: %s\n", credentialsPath)
-		fmt.Println("\nRun 'claude login' to authenticate Claude Code first.")
-		if runtime.GOOS == "windows" {
-			fmt.Println("\nIf Claude Code is installed in WSL, use -claude-home to point to")
-			fmt.Println(`the WSL home directory, e.g.:`)
-			fmt.Println(`  claude-quota -claude-home \\wsl$\<distro>\home\<username>`)
-			fmt.Println(`Run "wsl -l -q" to list available WSL distributions.`)
-			fmt.Print("\nPress enter to continue...")
-			bufio.NewReader(os.Stdin).ReadBytes('\n')
+	// On macOS, credentials may be stored in the Keychain, so we skip the
+	// file-existence pre-check and let NewOAuthCredentials() try both.
+	if runtime.GOOS != "darwin" {
+		if _, err := os.Stat(credentialsPath); os.IsNotExist(err) {
+			fmt.Println("Claude Code credentials not found.")
+			fmt.Printf("Expected: %s\n", credentialsPath)
+			fmt.Println("\nRun 'claude login' to authenticate Claude Code first.")
+			if runtime.GOOS == "windows" {
+				fmt.Println("\nIf Claude Code is installed in WSL, use -claude-home to point to")
+				fmt.Println(`the WSL home directory, e.g.:`)
+				fmt.Println(`  claude-quota -claude-home \\wsl$\<distro>\home\<username>`)
+				fmt.Println(`Run "wsl -l -q" to list available WSL distributions.`)
+				fmt.Print("\nPress enter to continue...")
+				bufio.NewReader(os.Stdin).ReadBytes('\n')
+			}
+			os.Exit(1)
 		}
-		os.Exit(1)
 	}
 
 	fmt.Println(versionString())
