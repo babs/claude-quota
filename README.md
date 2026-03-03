@@ -39,6 +39,23 @@ claude login
 Download the latest binary for your platform from
 [Releases](https://github.com/babs/claude-quota/releases), then run it.
 
+## One-liner install (macOS & Linux)
+
+Downloads the latest release, installs the binary to `/usr/local/bin`, and configures autostart.
+
+- **macOS**: registers a LaunchAgent (`~/Library/LaunchAgents/com.claude-quota.plist`)
+- **Linux**: creates an XDG autostart entry (`~/.config/autostart/claude-quota.desktop`)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh | bash
+```
+
+To uninstall:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh | bash -s -- --uninstall
+```
+
 ## Build from source
 
 Requires Go 1.24+.
