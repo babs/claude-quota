@@ -308,6 +308,12 @@ func TestFetch_HTTP401(t *testing.T) {
 	if state.Error == "" {
 		t.Error("Error should be set on 401")
 	}
+	if state.ErrorType != ErrTypeHTTP {
+		t.Errorf("ErrorType = %q, want %q", state.ErrorType, ErrTypeHTTP)
+	}
+	if state.HTTPStatus != 401 {
+		t.Errorf("HTTPStatus = %d, want 401", state.HTTPStatus)
+	}
 }
 
 func TestFetch_HTTP403(t *testing.T) {
@@ -325,6 +331,12 @@ func TestFetch_HTTP403(t *testing.T) {
 	state := qc.State()
 	if state.Error != "Scope missing user:profile" {
 		t.Errorf("Error = %q, want scope error", state.Error)
+	}
+	if state.ErrorType != ErrTypeHTTP {
+		t.Errorf("ErrorType = %q, want %q", state.ErrorType, ErrTypeHTTP)
+	}
+	if state.HTTPStatus != 403 {
+		t.Errorf("HTTPStatus = %d, want 403", state.HTTPStatus)
 	}
 }
 
@@ -347,6 +359,9 @@ func TestFetch_InvalidJSON(t *testing.T) {
 	if state.Error == "" {
 		t.Error("Error should be set on invalid JSON")
 	}
+	if state.ErrorType != ErrTypeParse {
+		t.Errorf("ErrorType = %q, want %q", state.ErrorType, ErrTypeParse)
+	}
 }
 
 func TestFetch_TokenExpired(t *testing.T) {
@@ -361,6 +376,9 @@ func TestFetch_TokenExpired(t *testing.T) {
 	state := qc.State()
 	if !state.TokenExpired {
 		t.Error("TokenExpired should be true")
+	}
+	if state.ErrorType != ErrTypeCredential {
+		t.Errorf("ErrorType = %q, want %q", state.ErrorType, ErrTypeCredential)
 	}
 	if !errors.Is(ErrTokenExpired, ErrTokenExpired) {
 		t.Error("sanity check failed")
@@ -390,6 +408,12 @@ func TestFetch_ResetsStaleState(t *testing.T) {
 	}
 	if state.TokenExpired {
 		t.Error("TokenExpired should be false after non-token error")
+	}
+	if state.ErrorType != ErrTypeHTTP {
+		t.Errorf("ErrorType = %q, want %q", state.ErrorType, ErrTypeHTTP)
+	}
+	if state.HTTPStatus != 500 {
+		t.Errorf("HTTPStatus = %d, want 500", state.HTTPStatus)
 	}
 }
 

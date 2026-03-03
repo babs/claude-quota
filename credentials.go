@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,17 +28,22 @@ func init() {
 // credentialsFile represents the on-disk ~/.claude/.credentials.json structure.
 type credentialsFile struct {
 	ClaudeAiOauth struct {
-		AccessToken  string `json:"accessToken"`
-		RefreshToken string `json:"refreshToken"`
-		ExpiresAt    int64  `json:"expiresAt"` // milliseconds since epoch
+		AccessToken      string `json:"accessToken"`
+		RefreshToken     string `json:"refreshToken"`
+		ExpiresAt        int64  `json:"expiresAt"` // milliseconds since epoch
+		SubscriptionType string `json:"subscriptionType"`
+		RateLimitTier    string `json:"rateLimitTier"`
 	} `json:"claudeAiOauth"`
 }
 
 // OAuthCredentials manages Claude Code OAuth credentials.
 type OAuthCredentials struct {
-	mu          sync.Mutex
-	accessToken string
-	expiresAt   int64 // ms since epoch
+	mu               sync.Mutex
+	accessToken      string
+	refreshToken     string
+	expiresAt        int64 // ms since epoch
+	subscriptionType string
+	rateLimitTier    string
 }
 
 // NewOAuthCredentials loads credentials from disk and returns a manager.
@@ -65,7 +72,10 @@ func (oc *OAuthCredentials) loadFromFile() error {
 	}
 
 	oc.accessToken = creds.ClaudeAiOauth.AccessToken
+	oc.refreshToken = creds.ClaudeAiOauth.RefreshToken
 	oc.expiresAt = creds.ClaudeAiOauth.ExpiresAt
+	oc.subscriptionType = creds.ClaudeAiOauth.SubscriptionType
+	oc.rateLimitTier = creds.ClaudeAiOauth.RateLimitTier
 	return nil
 }
 
@@ -96,4 +106,68 @@ func (oc *OAuthCredentials) GetAccessToken() (string, error) {
 		log.Println("Reloaded valid token from disk")
 	}
 	return oc.accessToken, nil
+}
+
+// CredentialSnapshot holds a consistent point-in-time view of credentials.
+type CredentialSnapshot struct {
+	Changed          bool
+	AccessToken      string
+	RefreshTokenHash string
+	SubscriptionType string
+	RateLimitTier    string
+}
+
+// ReloadAndSnapshot re-reads credentials from disk and returns a consistent
+// snapshot under a single lock, avoiding TOCTOU between reload/token/hash.
+func (oc *OAuthCredentials) ReloadAndSnapshot() (CredentialSnapshot, error) {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+
+	prev := oc.refreshToken
+	if err := oc.load(); err != nil {
+		return CredentialSnapshot{}, err
+	}
+	if oc.isExpired() {
+		return CredentialSnapshot{}, ErrTokenExpired
+	}
+
+	var hash string
+	if oc.refreshToken != "" {
+		h := sha256.Sum256([]byte(oc.refreshToken))
+		hash = hex.EncodeToString(h[:])
+	}
+
+	return CredentialSnapshot{
+		Changed:          oc.refreshToken != prev,
+		AccessToken:      oc.accessToken,
+		RefreshTokenHash: hash,
+		SubscriptionType: oc.subscriptionType,
+		RateLimitTier:    oc.rateLimitTier,
+	}, nil
+}
+
+// RefreshTokenHash returns SHA256 hex of the refresh token, or empty if absent.
+func (oc *OAuthCredentials) RefreshTokenHash() string {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+
+	if oc.refreshToken == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte(oc.refreshToken))
+	return hex.EncodeToString(h[:])
+}
+
+// SubscriptionType returns the subscription type from the credentials file.
+func (oc *OAuthCredentials) SubscriptionType() string {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	return oc.subscriptionType
+}
+
+// RateLimitTier returns the rate limit tier from the credentials file.
+func (oc *OAuthCredentials) RateLimitTier() string {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	return oc.rateLimitTier
 }

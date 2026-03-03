@@ -32,7 +32,10 @@ func (oc *OAuthCredentials) load() error {
 		return oc.loadFromFile()
 	}
 	oc.accessToken = creds.ClaudeAiOauth.AccessToken
+	oc.refreshToken = creds.ClaudeAiOauth.RefreshToken
 	oc.expiresAt = creds.ClaudeAiOauth.ExpiresAt
+	oc.subscriptionType = creds.ClaudeAiOauth.SubscriptionType
+	oc.rateLimitTier = creds.ClaudeAiOauth.RateLimitTier
 	return nil
 }
 

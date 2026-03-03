@@ -45,6 +45,7 @@ func main() {
 	criticalThreshold := flag.Float64("critical-threshold", 0, "critical utilization threshold in % (env: CLAUDE_QUOTA_CRITICAL_THRESHOLD)")
 	indicator := flag.String("indicator", "", "indicator type: pie, bar, arc, bar-proj (env: CLAUDE_QUOTA_INDICATOR)")
 	showText := flag.Bool("show-text", true, "show percentage text on icon (env: CLAUDE_QUOTA_SHOW_TEXT)")
+	stats := flag.Bool("stats", false, "enable local stats collection (env: CLAUDE_QUOTA_STATS)")
 	claudeHome := flag.String("claude-home", "", "home directory for Claude credentials (env: CLAUDE_QUOTA_CLAUDE_HOME)")
 	flag.Usage = func() {
 		fmt.Print(versionStringLong())
@@ -91,9 +92,13 @@ func main() {
 	// flag.Bool defaults to true, so we can't distinguish "not set" from
 	// "-show-text=true" without flag.Visit.
 	var showTextOverride *bool
+	var statsOverride *bool
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "show-text" {
 			showTextOverride = showText
+		}
+		if f.Name == "stats" {
+			statsOverride = stats
 		}
 	})
 
@@ -105,6 +110,7 @@ func main() {
 		IconSize:          *iconSize,
 		Indicator:         *indicator,
 		ShowText:          showTextOverride,
+		Stats:             statsOverride,
 		WarningThreshold:  *warningThreshold,
 		CriticalThreshold: *criticalThreshold,
 	})
@@ -117,7 +123,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	app := NewApp(cfg, creds, client)
+	var statsStore *StatsStore
+	if cfg.Stats {
+		var statsErr error
+		statsStore, statsErr = NewStatsStore()
+		if statsErr != nil {
+			log.Printf("Warning: stats collection disabled: %v", statsErr)
+		} else {
+			fmt.Printf("Stats DB: %s\n", statsDBPath)
+		}
+	} else {
+		fmt.Println("Stats: disabled")
+	}
+
+	resolver := NewAccountResolver(client, statsStore)
+	app := NewApp(cfg, creds, client, statsStore, resolver)
 
 	// Handle interrupt for clean shutdown (SIGINT on all platforms, SIGTERM on Unix).
 	sigCh := make(chan os.Signal, 1)
@@ -141,6 +161,7 @@ type overrides struct {
 	IconSize          int
 	Indicator         string
 	ShowText          *bool
+	Stats             *bool
 	WarningThreshold  float64
 	CriticalThreshold float64
 }
@@ -222,6 +243,21 @@ func applyOverrides(cfg *Config, o overrides) {
 	}
 	if o.ShowText != nil {
 		cfg.ShowText = o.ShowText
+	}
+
+	// Stats: env < flag.
+	if v := os.Getenv("CLAUDE_QUOTA_STATS"); v != "" {
+		switch v {
+		case "true", "1":
+			cfg.Stats = true
+		case "false", "0":
+			cfg.Stats = false
+		default:
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_STATS=%q", v)
+		}
+	}
+	if o.Stats != nil {
+		cfg.Stats = *o.Stats
 	}
 
 	// Thresholds: cross-field validation, kept inline.
