@@ -41,7 +41,7 @@ Download the latest binary for your platform from
 Downloads the latest release, installs the binary, and configures autostart.
 
 - **macOS**: installs to `/usr/local/bin`, registers a LaunchAgent (`~/Library/LaunchAgents/com.claude-quota.plist`)
-- **Linux**: installs to `~/.local/share/claude-quota/`, creates an XDG autostart entry (`~/.config/autostart/claude-quota.desktop`)
+- **Linux**: installs to `~/.local/share/claude-quota/`, creates a desktop entry in `~/.local/share/applications/` and symlinks it to `~/.config/autostart/`
 
 ```bash
 curl -fsSL \
@@ -49,12 +49,20 @@ curl -fsSL \
   | bash
 ```
 
-Any extra flags are persisted in the autostart configuration (LaunchAgent plist / `.desktop` file):
+Any extra flags are persisted in the startup configuration (LaunchAgent plist on macOS, `.desktop` entry on Linux):
 
 ```bash
 curl -fsSL \
   https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh \
   | bash -s -- -stats -indicator bar-proj
+```
+
+Install without configuring autostart (binary only, user manages startup manually):
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh \
+  | bash -s -- --no-autostart
 ```
 
 To uninstall:
@@ -182,7 +190,7 @@ To list available WSL distributions, run `wsl -l -q` in PowerShell or cmd.
 ## Autostart (Linux)
 
 The install script configures autostart automatically. For manual setup, create
-`~/.config/autostart/claude-quota.desktop`:
+`~/.local/share/applications/claude-quota.desktop`:
 
 ```ini
 [Desktop Entry]
@@ -192,9 +200,14 @@ Exec=$HOME/.local/share/claude-quota/claude-quota
 Icon=$HOME/.local/share/claude-quota/claude-quota.svg
 Hidden=false
 NoDisplay=false
-X-GNOME-Autostart-enabled=true
 StartupNotify=false
 Terminal=false
+```
+
+Then symlink it into autostart:
+
+```bash
+ln -sf ~/.local/share/applications/claude-quota.desktop ~/.config/autostart/
 ```
 
 ## How it works

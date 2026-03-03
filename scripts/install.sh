@@ -10,8 +10,9 @@ for cmd in curl xz; do
 done
 
 usage() {
-  echo "Usage: $0 [--uninstall] [flags for ${BINARY}...]"
-  echo "  --uninstall  Remove ${BINARY} and autostart config"
+  echo "Usage: $0 [--uninstall] [--no-autostart] [flags for ${BINARY}...]"
+  echo "  --uninstall      Remove ${BINARY} and autostart config"
+  echo "  --no-autostart   Install without configuring autostart"
   echo "  Any other flags are passed to ${BINARY} and persisted in autostart config"
   echo ""
   echo "Example: $0 -stats -indicator bar-proj"
@@ -25,6 +26,7 @@ uninstall() {
     sudo rm -f "${INSTALL_DIR}/${BINARY}" && echo "Removed ${INSTALL_DIR}/${BINARY}"
   elif [ "$OS" = "linux" ]; then
     pkill -x "$BINARY" 2>/dev/null && echo "Process stopped." || true
+    rm -f "$AUTOSTART_PATH" && echo "Removed $AUTOSTART_PATH"
     rm -f "$DESKTOP_PATH" && echo "Removed $DESKTOP_PATH"
     rm -f "${INSTALL_DIR}/${BINARY}" "${INSTALL_DIR}/claude-quota.svg" && echo "Removed binary and icon"
     rmdir "$INSTALL_DIR" 2>/dev/null && echo "Removed $INSTALL_DIR" || echo "Note: $INSTALL_DIR not empty, kept in place"
@@ -48,17 +50,20 @@ case "$OS" in
     ;;
   linux)
     INSTALL_DIR="$HOME/.local/share/claude-quota"
-    DESKTOP_PATH="$HOME/.config/autostart/claude-quota.desktop"
+    DESKTOP_PATH="$HOME/.local/share/applications/claude-quota.desktop"
+    AUTOSTART_PATH="$HOME/.config/autostart/claude-quota.desktop"
     ;;
   *) echo "Unsupported OS: $OS"; exit 1 ;;
 esac
 
 UNINSTALL=0
+AUTOSTART=1
 BINARY_FLAGS=""
 for arg in "$@"; do
   case "$arg" in
-    --uninstall) UNINSTALL=1 ;;
-    -h|--help)   usage ;;
+    --uninstall)    UNINSTALL=1 ;;
+    --no-autostart) AUTOSTART=0 ;;
+    -h|--help)      usage ;;
     *) BINARY_FLAGS="${BINARY_FLAGS:+$BINARY_FLAGS }$arg" ;;
   esac
 done
@@ -89,6 +94,36 @@ else
   mv "$TMP/${ASSET}" "${INSTALL_DIR}/${BINARY}"
 fi
 echo "Installed: ${INSTALL_DIR}/${BINARY}"
+
+# Linux: always install icon and desktop entry
+if [ "$OS" = "linux" ]; then
+  ICON_PATH="${INSTALL_DIR}/claude-quota.svg"
+  echo "Downloading icon..."
+  curl -fsSL "$ICON_URL" -o "$ICON_PATH" || echo "Warning: icon download failed, continuing without icon"
+
+  mkdir -p "$(dirname "$DESKTOP_PATH")"
+  cat > "$DESKTOP_PATH" << EOF
+[Desktop Entry]
+Type=Application
+Name=Claude Quota Widget
+Exec=${INSTALL_DIR}/${BINARY}${BINARY_FLAGS:+ $BINARY_FLAGS}
+Icon=${ICON_PATH}
+Hidden=false
+NoDisplay=false
+StartupNotify=false
+Terminal=false
+EOF
+  echo "Desktop entry installed: $DESKTOP_PATH"
+fi
+
+if [ "$AUTOSTART" = "0" ]; then
+  echo "Skipping autostart configuration (--no-autostart)."
+  if [ "$OS" = "darwin" ] && [ -n "$BINARY_FLAGS" ]; then
+    echo "Note: flags '$BINARY_FLAGS' were not persisted (no LaunchAgent created)."
+  fi
+  echo "Done. Run '${BINARY} -version' to verify."
+  exit 0
+fi
 
 # Configure autostart
 if [ "$OS" = "darwin" ]; then
@@ -126,25 +161,9 @@ EOF
   echo "LaunchAgent installed and started."
 
 elif [ "$OS" = "linux" ]; then
-  # Download icon
-  ICON_PATH="${INSTALL_DIR}/claude-quota.svg"
-  echo "Downloading icon..."
-  curl -fsSL "$ICON_URL" -o "$ICON_PATH" || echo "Warning: icon download failed, continuing without icon"
-
-  mkdir -p "$(dirname "$DESKTOP_PATH")"
-  cat > "$DESKTOP_PATH" << EOF
-[Desktop Entry]
-Type=Application
-Name=Claude Quota Widget
-Exec=${INSTALL_DIR}/${BINARY}${BINARY_FLAGS:+ $BINARY_FLAGS}
-Icon=${ICON_PATH}
-Hidden=false
-NoDisplay=false
-X-GNOME-Autostart-enabled=true
-StartupNotify=false
-Terminal=false
-EOF
-  echo "Autostart entry installed: $DESKTOP_PATH"
+  mkdir -p "$(dirname "$AUTOSTART_PATH")"
+  ln -sf "$DESKTOP_PATH" "$AUTOSTART_PATH"
+  echo "Autostart symlink: $AUTOSTART_PATH -> $DESKTOP_PATH"
   # Restart if already running, otherwise start
   pkill -x "$BINARY" 2>/dev/null || true
   if command -v gio &>/dev/null; then
