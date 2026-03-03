@@ -28,11 +28,8 @@ with live quota percentages. Multiple indicator styles available.
 
 ## Prerequisites
 
-Authenticate Claude Code first:
-
-```bash
-claude login
-```
+- Authenticate Claude Code first: `claude login`
+- `curl` and `xz` must be available (the install script checks for both)
 
 ## Install from release
 
@@ -47,19 +44,25 @@ Downloads the latest release, installs the binary, and configures autostart.
 - **Linux**: installs to `~/.local/share/claude-quota/`, creates an XDG autostart entry (`~/.config/autostart/claude-quota.desktop`)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh | bash
+curl -fsSL \
+  https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh \
+  | bash
 ```
 
 Any extra flags are persisted in the autostart configuration (LaunchAgent plist / `.desktop` file):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh | bash -s -- -stats -indicator bar-proj
+curl -fsSL \
+  https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh \
+  | bash -s -- -stats -indicator bar-proj
 ```
 
 To uninstall:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh | bash -s -- --uninstall
+curl -fsSL \
+  https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh \
+  | bash -s -- --uninstall
 ```
 
 ## Build from source
@@ -90,6 +93,7 @@ For a release build with version info and cross-compilation:
 ./claude-quota -indicator arc     # progress ring indicator
 ./claude-quota -indicator bar-proj # side-by-side bar with burn-rate projection
 ./claude-quota -show-text=false   # hide percentage text on icon
+./claude-quota -stats             # enable local stats collection
 ```
 
 Click the systray icon to see the quota breakdown with reset times.
@@ -124,8 +128,12 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
 | Icon size (px)          | `icon_size`             | `CLAUDE_QUOTA_ICON_SIZE`          | `-icon-size`          | `64`     |
 | Indicator style         | `indicator`             | `CLAUDE_QUOTA_INDICATOR`          | `-indicator`          | `"pie"`  |
 | Show text on icon       | `show_text`             | `CLAUDE_QUOTA_SHOW_TEXT`          | `-show-text`          | `true`   |
+| Local stats collection  | `stats`                 | `CLAUDE_QUOTA_STATS`              | `-stats`              | `false`  |
 | Warning threshold (%)   | `thresholds.warning`    | `CLAUDE_QUOTA_WARNING_THRESHOLD`  | `-warning-threshold`  | `60`     |
 | Critical threshold (%)  | `thresholds.critical`   | `CLAUDE_QUOTA_CRITICAL_THRESHOLD` | `-critical-threshold` | `85`     |
+
+> **Note:** When enabled, `-stats` stores quota snapshots in a local SQLite database
+> for users who want to analyse their consumption over time. Data never leaves the machine.
 
 `font_size` and `halo_size` are relative to the base icon size (64px). They scale
 automatically with `icon_size` — e.g. at `icon_size: 128` the rendered font is 2x larger.
@@ -173,13 +181,15 @@ To list available WSL distributions, run `wsl -l -q` in PowerShell or cmd.
 
 ## Autostart (Linux)
 
-Create `~/.config/autostart/claude-quota.desktop`:
+The install script configures autostart automatically. For manual setup, create
+`~/.config/autostart/claude-quota.desktop`:
 
 ```ini
 [Desktop Entry]
 Type=Application
 Name=Claude Quota Widget
-Exec=/path/to/claude-quota
+Exec=$HOME/.local/share/claude-quota/claude-quota
+Icon=$HOME/.local/share/claude-quota/claude-quota.svg
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
