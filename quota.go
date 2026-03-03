@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sync"
@@ -11,6 +12,18 @@ import (
 )
 
 var usageURL = "https://api.anthropic.com/api/oauth/usage"
+
+// userAgent is the User-Agent header sent to the Anthropic API.
+// Shared between quota and profile API clients.
+const userAgent = "claude-code/2.0.31"
+
+// Error type constants for classifying fetch failures.
+const (
+	ErrTypeCredential = "credential"
+	ErrTypeHTTP       = "http"
+	ErrTypeNetwork    = "network"
+	ErrTypeParse      = "parse"
+)
 
 // QuotaState holds the current quota snapshot.
 type QuotaState struct {
@@ -26,6 +39,8 @@ type QuotaState struct {
 	SevenDaySonnetResets *time.Time
 	LastUpdate           *time.Time
 	Error                string
+	ErrorType            string // credential, http, network, parse
+	HTTPStatus           int    // HTTP status code when ErrorType is "http"
 	TokenExpired         bool
 }
 
@@ -72,6 +87,7 @@ func (qc *QuotaClient) Fetch() bool {
 		qc.mu.Lock()
 		qc.state = QuotaState{
 			Error:        truncate(err.Error(), 50),
+			ErrorType:    ErrTypeCredential,
 			TokenExpired: errors.Is(err, ErrTokenExpired),
 		}
 		qc.mu.Unlock()
@@ -81,19 +97,19 @@ func (qc *QuotaClient) Fetch() bool {
 	req, err := http.NewRequest("GET", usageURL, nil)
 	if err != nil {
 		log.Printf("Request error: %v", err)
-		qc.setError(truncate(err.Error(), 50))
+		qc.setErrorTyped(truncate(err.Error(), 50), ErrTypeNetwork, 0)
 		return false
 	}
 
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", "claude-code/2.0.31")
+	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := qc.client.Do(req)
 	if err != nil {
 		log.Printf("Fetch failed: %v", err)
-		qc.setError(truncate(err.Error(), 50))
+		qc.setErrorTyped(truncate(err.Error(), 50), ErrTypeNetwork, 0)
 		return false
 	}
 	defer resp.Body.Close()
@@ -109,14 +125,15 @@ func (qc *QuotaClient) Fetch() bool {
 			msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
 		log.Printf("API error: %s", msg)
-		qc.setError(msg)
+		qc.setErrorTyped(msg, ErrTypeHTTP, resp.StatusCode)
 		return false
 	}
 
 	var data usageResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	// Limit body to 1MB to prevent memory exhaustion from misbehaving server.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&data); err != nil {
 		log.Printf("JSON parse failed: %v", err)
-		qc.setError(truncate(err.Error(), 50))
+		qc.setErrorTyped(truncate(err.Error(), 50), ErrTypeParse, 0)
 		return false
 	}
 
@@ -161,11 +178,16 @@ func (qc *QuotaClient) Fetch() bool {
 	return true
 }
 
-// setError resets state to an error-only snapshot.
-func (qc *QuotaClient) setError(msg string) {
+// setErrorTyped resets state to an error-only snapshot with classification.
+func (qc *QuotaClient) setErrorTyped(msg, errType string, httpStatus int) {
 	qc.mu.Lock()
-	qc.state = QuotaState{Error: msg}
+	qc.state = QuotaState{Error: msg, ErrorType: errType, HTTPStatus: httpStatus}
 	qc.mu.Unlock()
+}
+
+// setError resets state to an error-only snapshot (untyped, for backward compat).
+func (qc *QuotaClient) setError(msg string) {
+	qc.setErrorTyped(msg, "", 0)
 }
 
 // parseBucket extracts utilization and reset time from an API bucket.

@@ -18,6 +18,7 @@ type Config struct {
 	IconSize            int        `json:"icon_size"`
 	Indicator           string     `json:"indicator"`
 	ShowText            *bool      `json:"show_text"`
+	Stats               bool       `json:"stats"`
 	Thresholds          Thresholds `json:"thresholds"`
 }
 
@@ -30,11 +31,11 @@ type Thresholds struct {
 var configPath string
 
 func init() {
-	home, err := os.UserHomeDir()
+	dir, err := os.UserConfigDir()
 	if err != nil {
-		home = "."
+		dir = "."
 	}
-	configPath = filepath.Join(home, ".config", "claude-quota", "config.json")
+	configPath = filepath.Join(dir, "claude-quota", "config.json")
 }
 
 // defaultConfig returns a Config with default values.

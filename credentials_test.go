@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -39,14 +41,25 @@ func TestIsExpired_WithinMargin(t *testing.T) {
 
 func writeTestCredentials(t *testing.T, token string, expiresAt int64) string {
 	t.Helper()
+	return writeTestCredentialsFull(t, token, "test-refresh-token", expiresAt, "", "")
+}
+
+func writeTestCredentialsFull(t *testing.T, token, refreshToken string, expiresAt int64, subType, rateLimitTier string) string {
+	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "credentials.json")
-	creds := map[string]any{
-		"claudeAiOauth": map[string]any{
-			"accessToken": token,
-			"expiresAt":   expiresAt,
-		},
+	inner := map[string]any{
+		"accessToken":  token,
+		"refreshToken": refreshToken,
+		"expiresAt":    expiresAt,
 	}
+	if subType != "" {
+		inner["subscriptionType"] = subType
+	}
+	if rateLimitTier != "" {
+		inner["rateLimitTier"] = rateLimitTier
+	}
+	creds := map[string]any{"claudeAiOauth": inner}
 	data, err := json.Marshal(creds)
 	if err != nil {
 		t.Fatal(err)
@@ -233,5 +246,102 @@ func TestCredentialsPath_CustomPath(t *testing.T) {
 	}
 	if oc.accessToken != "wsl-token" {
 		t.Errorf("accessToken = %q, want %q", oc.accessToken, "wsl-token")
+	}
+}
+
+func TestReloadAndSnapshot_Changed(t *testing.T) {
+	orig := credentialsPath
+	defer func() { credentialsPath = orig }()
+
+	credentialsPath = writeTestCredentialsFull(t, "tok1", "refresh-1", time.Now().UnixMilli()+300_000, "", "")
+
+	oc, err := NewOAuthCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Overwrite with different refresh token.
+	dir := filepath.Dir(credentialsPath)
+	inner := map[string]any{
+		"accessToken":  "tok2",
+		"refreshToken": "refresh-2",
+		"expiresAt":    time.Now().UnixMilli() + 300_000,
+	}
+	data, _ := json.Marshal(map[string]any{"claudeAiOauth": inner})
+	os.WriteFile(filepath.Join(dir, filepath.Base(credentialsPath)), data, 0600)
+
+	snap, err := oc.ReloadAndSnapshot()
+	if err != nil {
+		t.Fatalf("ReloadAndSnapshot() error: %v", err)
+	}
+	if !snap.Changed {
+		t.Error("ReloadAndSnapshot() should return Changed=true when refresh token differs")
+	}
+	if snap.AccessToken != "tok2" {
+		t.Errorf("AccessToken = %q, want tok2", snap.AccessToken)
+	}
+	if snap.RefreshTokenHash == "" {
+		t.Error("RefreshTokenHash should not be empty")
+	}
+}
+
+func TestReloadAndSnapshot_Unchanged(t *testing.T) {
+	orig := credentialsPath
+	defer func() { credentialsPath = orig }()
+
+	credentialsPath = writeTestCredentialsFull(t, "tok1", "refresh-1", time.Now().UnixMilli()+300_000, "pro", "tier4")
+
+	oc, err := NewOAuthCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := oc.ReloadAndSnapshot()
+	if err != nil {
+		t.Fatalf("ReloadAndSnapshot() error: %v", err)
+	}
+	if snap.Changed {
+		t.Error("ReloadAndSnapshot() should return Changed=false when refresh token is the same")
+	}
+	if snap.SubscriptionType != "pro" {
+		t.Errorf("SubscriptionType = %q, want pro", snap.SubscriptionType)
+	}
+	if snap.RateLimitTier != "tier4" {
+		t.Errorf("RateLimitTier = %q, want tier4", snap.RateLimitTier)
+	}
+}
+
+func TestRefreshTokenHash(t *testing.T) {
+	oc := &OAuthCredentials{refreshToken: "my-refresh-token"}
+	got := oc.RefreshTokenHash()
+	h := sha256.Sum256([]byte("my-refresh-token"))
+	want := hex.EncodeToString(h[:])
+	if got != want {
+		t.Errorf("RefreshTokenHash() = %q, want %q", got, want)
+	}
+}
+
+func TestRefreshTokenHash_Empty(t *testing.T) {
+	oc := &OAuthCredentials{}
+	if got := oc.RefreshTokenHash(); got != "" {
+		t.Errorf("RefreshTokenHash() = %q, want empty", got)
+	}
+}
+
+func TestLoad_ParsesSubscriptionType(t *testing.T) {
+	orig := credentialsPath
+	defer func() { credentialsPath = orig }()
+
+	credentialsPath = writeTestCredentialsFull(t, "tok", "refresh", time.Now().UnixMilli()+300_000, "pro", "tier4")
+
+	oc, err := NewOAuthCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oc.SubscriptionType() != "pro" {
+		t.Errorf("SubscriptionType() = %q, want %q", oc.SubscriptionType(), "pro")
+	}
+	if oc.RateLimitTier() != "tier4" {
+		t.Errorf("RateLimitTier() = %q, want %q", oc.RateLimitTier(), "tier4")
 	}
 }

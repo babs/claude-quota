@@ -12,10 +12,15 @@ import (
 
 // App ties together config, credentials, quota client, and systray.
 type App struct {
-	config Config
-	quota  *QuotaClient
-	quit   chan struct{} // closed on shutdown
-	uiMu   sync.Mutex    // serializes updateUI calls
+	config   Config
+	creds    *OAuthCredentials
+	quota    *QuotaClient
+	stats    *StatsStore
+	resolver *AccountResolver
+	account  AccountInfo
+	quit     chan struct{} // closed on shutdown
+	fetchMu  sync.Mutex    // serializes refreshAccount+Fetch+record across goroutines
+	uiMu     sync.Mutex    // serializes updateUI calls
 
 	// Menu items updated dynamically.
 	mFiveHour           *systray.MenuItem
@@ -26,16 +31,20 @@ type App struct {
 	mSevenDaySaturation *systray.MenuItem
 	mSevenDaySonnet     *systray.MenuItem
 	mUpdated            *systray.MenuItem
+	mStats              *systray.MenuItem
 	mRefresh            *systray.MenuItem
 	mQuit               *systray.MenuItem
 }
 
 // NewApp creates an App from the given config and credentials.
-func NewApp(cfg Config, creds *OAuthCredentials, client *http.Client) *App {
+func NewApp(cfg Config, creds *OAuthCredentials, client *http.Client, stats *StatsStore, resolver *AccountResolver) *App {
 	return &App{
-		config: cfg,
-		quota:  NewQuotaClient(creds, client),
-		quit:   make(chan struct{}),
+		config:   cfg,
+		creds:    creds,
+		quota:    NewQuotaClient(creds, client),
+		stats:    stats,
+		resolver: resolver,
+		quit:     make(chan struct{}),
 	}
 }
 
@@ -84,11 +93,15 @@ func (a *App) onReady() {
 
 	a.mUpdated = systray.AddMenuItem("Updated: --", "Last update time")
 	a.mUpdated.Disable()
+	if a.stats != nil {
+		a.mStats = systray.AddMenuItem(fmt.Sprintf("Stats: %s", statsDBPath), "Stats database location")
+		a.mStats.Disable()
+	}
 	a.mRefresh = systray.AddMenuItem("Refresh", "Refresh quota now")
 	a.mQuit = systray.AddMenuItem("Quit", "Quit the application")
 
 	// Initial fetch + icon update.
-	a.quota.Fetch()
+	a.fetchCycle()
 	a.updateUI()
 
 	// Start background loops.
@@ -104,6 +117,9 @@ func (a *App) onExit() {
 	default:
 		close(a.quit)
 	}
+	if a.stats != nil {
+		a.stats.Close()
+	}
 }
 
 // eventLoop handles menu item clicks.
@@ -113,7 +129,7 @@ func (a *App) eventLoop() {
 		case <-a.quit:
 			return
 		case <-a.mRefresh.ClickedCh:
-			a.quota.Fetch()
+			a.fetchCycle()
 			a.updateUI()
 		case <-a.mQuit.ClickedCh:
 			a.Shutdown()
@@ -134,7 +150,7 @@ func (a *App) pollLoop() {
 	}
 
 	for {
-		a.quota.Fetch()
+		a.fetchCycle()
 		a.updateUI()
 
 		select {
@@ -158,6 +174,61 @@ func (a *App) updatedTicker() {
 			a.mUpdated.SetTitle(formatUpdatedAgo(state.LastUpdate))
 		}
 	}
+}
+
+// fetchCycle runs the full refresh-account + fetch-quota + record cycle.
+// Serialized via fetchMu so pollLoop and eventLoop don't race on a.account.
+func (a *App) fetchCycle() {
+	a.fetchMu.Lock()
+	defer a.fetchMu.Unlock()
+
+	a.refreshAccount()
+	if a.quota.Fetch() {
+		a.recordStats()
+	} else {
+		a.recordError()
+	}
+}
+
+// refreshAccount resolves account identity, re-reading credentials if they changed.
+// Must be called under fetchMu.
+func (a *App) refreshAccount() {
+	if a.resolver == nil {
+		return
+	}
+	snap, err := a.creds.ReloadAndSnapshot()
+	if err != nil {
+		log.Printf("Credential reload failed: %v", err)
+		// Clear stale identity so fetches aren't attributed to wrong account.
+		a.account = AccountInfo{}
+		return
+	}
+	if !snap.Changed && a.account.AccountUUID != "" {
+		return
+	}
+	a.account = a.resolver.Resolve(snap)
+}
+
+// recordStats records the current quota state if stats collection is enabled.
+// Must be called under fetchMu.
+func (a *App) recordStats() {
+	if a.stats == nil {
+		return
+	}
+	a.stats.RecordFetch(a.quota.State(), a.account.AccountUUID)
+}
+
+// recordError records a fetch error if stats collection is enabled.
+// Must be called under fetchMu.
+func (a *App) recordError() {
+	if a.stats == nil {
+		return
+	}
+	state := a.quota.State()
+	if state.Error == "" {
+		return
+	}
+	a.stats.RecordError(a.account.AccountUUID, state.ErrorType, state.HTTPStatus, state.Error)
 }
 
 // updateUI refreshes the icon and menu items from current state.
