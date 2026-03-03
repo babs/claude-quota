@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="#D97757"/>
+
+  <!-- Inner circle (darker) -->
+  <circle cx="64" cy="64" r="48" fill="#1a1a1a"/>
+
+  <!-- Quota meter arc (background) -->
+  <path d="M 64 24 A 40 40 0 1 1 63.99 24" fill="none" stroke="#333" stroke-width="12" stroke-linecap="round"/>
+
+  <!-- Quota meter arc (filled portion - ~70%) -->
+  <path d="M 64 24 A 40 40 0 1 1 24.5 76" fill="none" stroke="#D97757" stroke-width="12" stroke-linecap="round"/>
+
+  <!-- Center text area -->
+  <text x="64" y="58" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="14" font-weight="bold">QUOTA</text>
+  <text x="64" y="78" text-anchor="middle" fill="#D97757" font-family="sans-serif" font-size="18" font-weight="bold">70%</text>
+</svg>
