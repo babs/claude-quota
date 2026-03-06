@@ -101,6 +101,7 @@ For a release build with version info and cross-compilation:
 ./claude-quota -indicator arc     # progress ring indicator
 ./claude-quota -indicator bar-proj # side-by-side bar with burn-rate projection
 ./claude-quota -show-text=false   # hide percentage text on icon
+./claude-quota -show-account      # show account email/org in menu
 ./claude-quota -stats             # enable local stats collection
 ```
 
@@ -119,6 +120,7 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
   "icon_size": 64,
   "indicator": "pie",
   "show_text": true,
+  "show_account": false,
   "thresholds": {
     "warning": 60,
     "critical": 85
@@ -136,6 +138,7 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
 | Icon size (px)          | `icon_size`             | `CLAUDE_QUOTA_ICON_SIZE`          | `-icon-size`          | `64`     |
 | Indicator style         | `indicator`             | `CLAUDE_QUOTA_INDICATOR`          | `-indicator`          | `"pie"`  |
 | Show text on icon       | `show_text`             | `CLAUDE_QUOTA_SHOW_TEXT`          | `-show-text`          | `true`   |
+| Show account in menu    | `show_account`          | `CLAUDE_QUOTA_SHOW_ACCOUNT`       | `-show-account`       | `false`  |
 | Local stats collection  | `stats`                 | `CLAUDE_QUOTA_STATS`              | `-stats`              | `false`  |
 | Warning threshold (%)   | `thresholds.warning`    | `CLAUDE_QUOTA_WARNING_THRESHOLD`  | `-warning-threshold`  | `60`     |
 | Critical threshold (%)  | `thresholds.critical`   | `CLAUDE_QUOTA_CRITICAL_THRESHOLD` | `-critical-threshold` | `85`     |

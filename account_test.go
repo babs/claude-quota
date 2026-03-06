@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 )
 
@@ -94,11 +95,72 @@ func TestResolve_NilResolver(t *testing.T) {
 	}
 }
 
-func TestResolve_NilStats(t *testing.T) {
-	r := NewAccountResolver(&http.Client{}, nil)
+func TestResolve_NilStats_CallsAPI(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		w.Write([]byte(`{"account":{"uuid":"uuid-no-db","email":"no-db@example.com"},"organization":{"uuid":"org-1","name":"No DB Org"}}`))
+	}))
+	defer srv.Close()
+
+	origURL := profileURL
+	defer func() { profileURL = origURL }()
+	profileURL = srv.URL
+
+	r := NewAccountResolver(srv.Client(), nil)
 	info := r.Resolve(testSnap("token", "hash"))
-	if info.AccountUUID != "" {
-		t.Errorf("nil stats should return empty AccountInfo, got %+v", info)
+	if info.AccountUUID != "uuid-no-db" {
+		t.Errorf("AccountUUID = %q, want uuid-no-db", info.AccountUUID)
+	}
+	if info.EmailAddress != "no-db@example.com" {
+		t.Errorf("EmailAddress = %q, want no-db@example.com", info.EmailAddress)
+	}
+	if info.OrganizationName != "No DB Org" {
+		t.Errorf("OrganizationName = %q, want 'No DB Org'", info.OrganizationName)
+	}
+}
+
+func TestResolve_NilStats_InMemoryCache(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(200)
+		w.Write([]byte(`{"account":{"uuid":"cached","email":"c@d.com"},"organization":{}}`))
+	}))
+	defer srv.Close()
+
+	origURL := profileURL
+	defer func() { profileURL = origURL }()
+	profileURL = srv.URL
+
+	r := NewAccountResolver(srv.Client(), nil)
+	r.Resolve(testSnap("token", "hash"))
+	r.Resolve(testSnap("token", "hash"))
+	if c := calls.Load(); c != 1 {
+		t.Errorf("API called %d times, want 1 (second call should use in-memory cache)", c)
+	}
+}
+
+func TestResolve_NilStats_InMemoryCacheInvalidation(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(200)
+		w.Write([]byte(`{"account":{"uuid":"u-` + r.Header.Get("Authorization") + `","email":"a@b.com"},"organization":{}}`))
+	}))
+	defer srv.Close()
+
+	origURL := profileURL
+	defer func() { profileURL = origURL }()
+	profileURL = srv.URL
+
+	r := NewAccountResolver(srv.Client(), nil)
+	info1 := r.Resolve(testSnap("tok1", "hash-1"))
+	info2 := r.Resolve(testSnap("tok2", "hash-2"))
+	if c := calls.Load(); c != 2 {
+		t.Errorf("API called %d times, want 2 (different hash should trigger new call)", c)
+	}
+	if info1.AccountUUID == info2.AccountUUID {
+		t.Errorf("different hashes returned same AccountUUID %q", info1.AccountUUID)
 	}
 }
 

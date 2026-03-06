@@ -45,6 +45,7 @@ func main() {
 	criticalThreshold := flag.Float64("critical-threshold", 0, "critical utilization threshold in % (env: CLAUDE_QUOTA_CRITICAL_THRESHOLD)")
 	indicator := flag.String("indicator", "", "indicator type: pie, bar, arc, bar-proj (env: CLAUDE_QUOTA_INDICATOR)")
 	showText := flag.Bool("show-text", true, "show percentage text on icon (env: CLAUDE_QUOTA_SHOW_TEXT)")
+	showAccount := flag.Bool("show-account", false, "show account info in menu (env: CLAUDE_QUOTA_SHOW_ACCOUNT)")
 	stats := flag.Bool("stats", false, "enable local stats collection (env: CLAUDE_QUOTA_STATS)")
 	claudeHome := flag.String("claude-home", "", "home directory for Claude credentials (env: CLAUDE_QUOTA_CLAUDE_HOME)")
 	flag.Usage = func() {
@@ -92,10 +93,14 @@ func main() {
 	// flag.Bool defaults to true, so we can't distinguish "not set" from
 	// "-show-text=true" without flag.Visit.
 	var showTextOverride *bool
+	var showAccountOverride *bool
 	var statsOverride *bool
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "show-text" {
 			showTextOverride = showText
+		}
+		if f.Name == "show-account" {
+			showAccountOverride = showAccount
 		}
 		if f.Name == "stats" {
 			statsOverride = stats
@@ -110,6 +115,7 @@ func main() {
 		IconSize:          *iconSize,
 		Indicator:         *indicator,
 		ShowText:          showTextOverride,
+		ShowAccount:       showAccountOverride,
 		Stats:             statsOverride,
 		WarningThreshold:  *warningThreshold,
 		CriticalThreshold: *criticalThreshold,
@@ -161,6 +167,7 @@ type overrides struct {
 	IconSize          int
 	Indicator         string
 	ShowText          *bool
+	ShowAccount       *bool
 	Stats             *bool
 	WarningThreshold  float64
 	CriticalThreshold float64
@@ -243,6 +250,21 @@ func applyOverrides(cfg *Config, o overrides) {
 	}
 	if o.ShowText != nil {
 		cfg.ShowText = o.ShowText
+	}
+
+	// ShowAccount: env < flag.
+	if v := os.Getenv("CLAUDE_QUOTA_SHOW_ACCOUNT"); v != "" {
+		switch v {
+		case "true", "1":
+			cfg.ShowAccount = true
+		case "false", "0":
+			cfg.ShowAccount = false
+		default:
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_SHOW_ACCOUNT=%q", v)
+		}
+	}
+	if o.ShowAccount != nil {
+		cfg.ShowAccount = *o.ShowAccount
 	}
 
 	// Stats: env < flag.
