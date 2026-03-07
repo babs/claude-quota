@@ -341,6 +341,96 @@ func TestApplyOverrides_ShowTextInvalidEnvIgnored(t *testing.T) {
 	}
 }
 
+func TestApplyOverrides_ShowAccountFlag(t *testing.T) {
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{HaloSize: -1, ShowAccount: boolPtr(true)})
+	if cfg.ShowAccount != true {
+		t.Errorf("ShowAccount = %v, want true", cfg.ShowAccount)
+	}
+}
+
+func TestApplyOverrides_ShowAccountEnvVar(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_SHOW_ACCOUNT", "true")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, noOverrides)
+	if cfg.ShowAccount != true {
+		t.Errorf("ShowAccount = %v, want true (env true)", cfg.ShowAccount)
+	}
+}
+
+func TestApplyOverrides_ShowAccountEnvVar0(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_SHOW_ACCOUNT", "0")
+	cfg := defaultConfig()
+	cfg.ShowAccount = true
+	applyOverrides(&cfg, noOverrides)
+	if cfg.ShowAccount != false {
+		t.Errorf("ShowAccount = %v, want false (env 0)", cfg.ShowAccount)
+	}
+}
+
+func TestApplyOverrides_ShowAccountFlagOverridesEnv(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_SHOW_ACCOUNT", "true")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{HaloSize: -1, ShowAccount: boolPtr(false)})
+	if cfg.ShowAccount != false {
+		t.Errorf("ShowAccount = %v, want false (flag should override env)", cfg.ShowAccount)
+	}
+}
+
+func TestApplyOverrides_ShowAccountInvalidEnvIgnored(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_SHOW_ACCOUNT", "maybe")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, noOverrides)
+	if cfg.ShowAccount != false {
+		t.Errorf("ShowAccount = %v, want false (invalid env should be ignored)", cfg.ShowAccount)
+	}
+}
+
+func TestApplyOverrides_StatsFlag(t *testing.T) {
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{HaloSize: -1, Stats: boolPtr(true)})
+	if cfg.Stats != true {
+		t.Errorf("Stats = %v, want true", cfg.Stats)
+	}
+}
+
+func TestApplyOverrides_StatsEnvVar(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_STATS", "true")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, noOverrides)
+	if cfg.Stats != true {
+		t.Errorf("Stats = %v, want true (env true)", cfg.Stats)
+	}
+}
+
+func TestApplyOverrides_StatsEnvVar0(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_STATS", "0")
+	cfg := defaultConfig()
+	cfg.Stats = true
+	applyOverrides(&cfg, noOverrides)
+	if cfg.Stats != false {
+		t.Errorf("Stats = %v, want false (env 0)", cfg.Stats)
+	}
+}
+
+func TestApplyOverrides_StatsFlagOverridesEnv(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_STATS", "true")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{HaloSize: -1, Stats: boolPtr(false)})
+	if cfg.Stats != false {
+		t.Errorf("Stats = %v, want false (flag should override env)", cfg.Stats)
+	}
+}
+
+func TestApplyOverrides_StatsInvalidEnvIgnored(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_STATS", "maybe")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, noOverrides)
+	if cfg.Stats != false {
+		t.Errorf("Stats = %v, want false (invalid env should be ignored)", cfg.Stats)
+	}
+}
+
 func TestConfigShowText_NilDefault(t *testing.T) {
 	cfg := Config{}
 	if configShowText(cfg) != true {

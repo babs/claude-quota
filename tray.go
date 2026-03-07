@@ -23,6 +23,8 @@ type App struct {
 	uiMu     sync.Mutex    // serializes updateUI calls
 
 	// Menu items updated dynamically.
+	mAccountEmail       *systray.MenuItem
+	mAccountOrg         *systray.MenuItem
 	mFiveHour           *systray.MenuItem
 	mProjection         *systray.MenuItem
 	mSaturation         *systray.MenuItem
@@ -70,6 +72,14 @@ func (a *App) onReady() {
 	systray.SetTooltip("Claude Quota")
 
 	// Create menu items.
+	if a.config.ShowAccount {
+		a.mAccountEmail = systray.AddMenuItem("", "Account email")
+		a.mAccountEmail.Disable()
+		a.mAccountEmail.Hide()
+		a.mAccountOrg = systray.AddMenuItem("", "Organization name")
+		a.mAccountOrg.Disable()
+		a.mAccountOrg.Hide()
+	}
 	a.mFiveHour = systray.AddMenuItem("5h: --", "5-hour quota")
 	a.mFiveHour.Disable()
 	a.mProjection = systray.AddMenuItem("", "Projected utilization at reset")
@@ -196,6 +206,9 @@ func (a *App) refreshAccount() {
 	if a.resolver == nil {
 		return
 	}
+	if a.stats == nil && !a.config.ShowAccount {
+		return
+	}
 	snap, err := a.creds.ReloadAndSnapshot()
 	if err != nil {
 		log.Printf("Credential reload failed: %v", err)
@@ -235,6 +248,11 @@ func (a *App) recordError() {
 // Serialized via uiMu because pollLoop and eventLoop may call concurrently,
 // and the shared font.Face used during rendering is not goroutine-safe.
 func (a *App) updateUI() {
+	// Snapshot account under fetchMu to avoid racing with refreshAccount.
+	a.fetchMu.Lock()
+	account := a.account
+	a.fetchMu.Unlock()
+
 	a.uiMu.Lock()
 	defer a.uiMu.Unlock()
 	state := a.quota.State()
@@ -259,6 +277,22 @@ func (a *App) updateUI() {
 	systray.SetTooltip(buildTooltip(state))
 
 	// Update menu items.
+	if a.mAccountEmail != nil {
+		if account.EmailAddress != "" {
+			a.mAccountEmail.SetTitle("Acct: " + account.EmailAddress)
+			a.mAccountEmail.Show()
+		} else {
+			a.mAccountEmail.Hide()
+		}
+	}
+	if a.mAccountOrg != nil {
+		if account.OrganizationName != "" {
+			a.mAccountOrg.SetTitle("Org: " + account.OrganizationName)
+			a.mAccountOrg.Show()
+		} else {
+			a.mAccountOrg.Hide()
+		}
+	}
 	a.mFiveHour.SetTitle(formatQuotaLine("5h", state.FiveHour, state.FiveHourResets))
 	if state.FiveHour != nil {
 		if projLine := formatProjectionLine(state.FiveHourProjected); projLine != "" {

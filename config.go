@@ -18,6 +18,7 @@ type Config struct {
 	IconSize            int        `json:"icon_size"`
 	Indicator           string     `json:"indicator"`
 	ShowText            *bool      `json:"show_text"`
+	ShowAccount         bool       `json:"show_account"`
 	Stats               bool       `json:"stats"`
 	Thresholds          Thresholds `json:"thresholds"`
 }

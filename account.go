@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sync"
 )
 
 var profileURL = "https://api.anthropic.com/api/oauth/profile"
@@ -31,33 +32,43 @@ type profileResponse struct {
 }
 
 // AccountResolver resolves account identity via the profile API with DB-backed cache.
+// When stats is nil, uses an in-memory cache keyed by refresh token hash.
 type AccountResolver struct {
-	client *http.Client
-	stats  *StatsStore
+	client   *http.Client
+	stats    *StatsStore
+	mu       sync.Mutex // protects lastHash/lastInfo
+	lastHash string
+	lastInfo AccountInfo
 }
 
-// NewAccountResolver creates a resolver. If stats is nil, the resolver degrades to no-op.
+// NewAccountResolver creates a resolver.
 func NewAccountResolver(client *http.Client, stats *StatsStore) *AccountResolver {
 	return &AccountResolver{client: client, stats: stats}
 }
 
 // Resolve returns account info for the given credential snapshot.
 // DB cache is checked first; on miss, the profile API is called.
+// When stats is nil, uses an in-memory cache keyed by refresh token hash.
 // On API error, falls back to using refreshTokenHash as AccountUUID.
 func (r *AccountResolver) Resolve(snap CredentialSnapshot) AccountInfo {
-	if r == nil || r.stats == nil {
+	if r == nil {
 		return AccountInfo{}
 	}
 	if snap.RefreshTokenHash == "" {
 		return AccountInfo{}
 	}
 
-	// DB cache hit.
+	if r.stats != nil {
+		return r.resolveWithDB(snap)
+	}
+	return r.resolveInMemory(snap)
+}
+
+func (r *AccountResolver) resolveWithDB(snap CredentialSnapshot) AccountInfo {
 	if info, ok := r.stats.LookupAccount(snap.RefreshTokenHash); ok {
 		return info
 	}
 
-	// Cache miss — call profile API.
 	info, err := r.fetchProfile(snap.AccessToken)
 	if err != nil {
 		log.Printf("Profile API error: %v — using hash as account ID", err)
@@ -65,6 +76,31 @@ func (r *AccountResolver) Resolve(snap CredentialSnapshot) AccountInfo {
 	}
 
 	r.stats.UpsertAccount(snap.RefreshTokenHash, info, snap.SubscriptionType, snap.RateLimitTier)
+	return info
+}
+
+func (r *AccountResolver) resolveInMemory(snap CredentialSnapshot) AccountInfo {
+	r.mu.Lock()
+	if r.lastHash == snap.RefreshTokenHash {
+		info := r.lastInfo
+		r.mu.Unlock()
+		return info
+	}
+	r.mu.Unlock()
+
+	// Fetch outside the lock to avoid holding it during HTTP I/O.
+	info, err := r.fetchProfile(snap.AccessToken)
+	if err != nil {
+		log.Printf("Profile API error: %v — using hash as account ID", err)
+		// Cached so we don't hammer a failing API on every poll cycle;
+		// clears on token rotation or process restart.
+		info = AccountInfo{AccountUUID: snap.RefreshTokenHash}
+	}
+
+	r.mu.Lock()
+	r.lastHash = snap.RefreshTokenHash
+	r.lastInfo = info
+	r.mu.Unlock()
 	return info
 }
 
