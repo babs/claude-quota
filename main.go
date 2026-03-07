@@ -21,6 +21,17 @@ var (
 	GithubRepo     = "babs/claude-quota"
 )
 
+// executablePath is resolved at startup before any update can replace the binary.
+var executablePath string
+
+func init() {
+	var err error
+	executablePath, err = os.Executable()
+	if err != nil {
+		executablePath = os.Args[0]
+	}
+}
+
 func versionString() string {
 	return fmt.Sprintf("claude-quota %s-%s", Version, CommitHash)
 }
@@ -156,6 +167,10 @@ func main() {
 	}()
 
 	app.Run()
+
+	if app.restartRequested {
+		execSelf()
+	}
 }
 
 // overrides holds CLI flag values for config overrides.

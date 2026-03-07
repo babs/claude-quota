@@ -23,7 +23,7 @@ with live quota percentages. Multiple indicator styles available.
 - Optional text overlay toggle (`show_text`)
 - Configurable icon size for HiDPI displays
 - Reloads OAuth token from disk when expired (relies on `claude login`)
-- Self-update from GitHub releases (`-update`)
+- Self-update from GitHub releases (`-update` or from the context menu)
 - Cross-platform: Linux, Windows, macOS
 
 ## Prerequisites
