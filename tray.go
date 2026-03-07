@@ -8,19 +8,35 @@ import (
 	"time"
 
 	"fyne.io/systray"
+	"golang.org/x/mod/semver"
+)
+
+// updatePhase tracks the state of the update menu item.
+type updatePhase int
+
+const (
+	updatePhaseCheck   updatePhase = iota // "Check for Updates" / "Up to date"
+	updatePhaseReady                      // "Update to vX.X.X"
+	updatePhaseApplied                    // "Restart to apply update"
 )
 
 // App ties together config, credentials, quota client, and systray.
 type App struct {
-	config   Config
-	creds    *OAuthCredentials
-	quota    *QuotaClient
-	stats    *StatsStore
-	resolver *AccountResolver
-	account  AccountInfo
-	quit     chan struct{} // closed on shutdown
-	fetchMu  sync.Mutex    // serializes refreshAccount+Fetch+record across goroutines
-	uiMu     sync.Mutex    // serializes updateUI calls
+	config           Config
+	creds            *OAuthCredentials
+	quota            *QuotaClient
+	stats            *StatsStore
+	resolver         *AccountResolver
+	account          AccountInfo
+	quit             chan struct{} // closed on shutdown
+	restartRequested bool          // set before shutdown to trigger re-exec
+	fetchMu          sync.Mutex    // serializes refreshAccount+Fetch+record across goroutines
+	uiMu             sync.Mutex    // serializes updateUI calls
+
+	// Update state.
+	updateMu      sync.Mutex
+	updateVersion string // latest version when an update is available
+	updatePhase   updatePhase
 
 	// Menu items updated dynamically.
 	mAccountEmail       *systray.MenuItem
@@ -35,6 +51,7 @@ type App struct {
 	mUpdated            *systray.MenuItem
 	mStats              *systray.MenuItem
 	mRefresh            *systray.MenuItem
+	mCheckUpdate        *systray.MenuItem
 	mQuit               *systray.MenuItem
 }
 
@@ -108,6 +125,7 @@ func (a *App) onReady() {
 		a.mStats.Disable()
 	}
 	a.mRefresh = systray.AddMenuItem("Refresh", "Refresh quota now")
+	a.mCheckUpdate = systray.AddMenuItem(fmt.Sprintf("Check for Updates (current %s)", Version), "Check for a newer version")
 	a.mQuit = systray.AddMenuItem("Quit", "Quit the application")
 
 	// Initial fetch + icon update.
@@ -141,6 +159,8 @@ func (a *App) eventLoop() {
 		case <-a.mRefresh.ClickedCh:
 			a.fetchCycle()
 			a.updateUI()
+		case <-a.mCheckUpdate.ClickedCh:
+			a.handleUpdateClick()
 		case <-a.mQuit.ClickedCh:
 			a.Shutdown()
 			return
@@ -332,6 +352,82 @@ func (a *App) updateUI() {
 	a.mSevenDaySonnet.SetTitle(formatQuotaLine("Sonnet 7d", state.SevenDaySonnet, state.SevenDaySonnetResets))
 
 	a.mUpdated.SetTitle(formatUpdatedAgo(state.LastUpdate))
+}
+
+// handleUpdateClick dispatches the click based on current update phase.
+func (a *App) handleUpdateClick() {
+	a.updateMu.Lock()
+	phase := a.updatePhase
+	version := a.updateVersion
+	a.updateMu.Unlock()
+
+	switch phase {
+	case updatePhaseCheck:
+		a.doUpdateCheck()
+	case updatePhaseReady:
+		a.doApplyUpdate(version)
+	case updatePhaseApplied:
+		a.mCheckUpdate.SetTitle("Restarting...")
+		a.mCheckUpdate.Disable()
+		a.restartRequested = true
+		a.Shutdown()
+	}
+}
+
+// doUpdateCheck checks GitHub for a newer version and updates the menu.
+func (a *App) doUpdateCheck() {
+	a.mCheckUpdate.SetTitle("Checking...")
+	a.mCheckUpdate.Disable()
+	go func() {
+		defer a.mCheckUpdate.Enable()
+
+		log.Printf("Checking for updates (current: %s)...", Version)
+		latest, err := fetchLatestVersion()
+		if err != nil {
+			log.Printf("Update check failed: %v", err)
+			a.mCheckUpdate.SetTitle(fmt.Sprintf("Update check failed: %v", err))
+			return
+		}
+
+		switch semver.Compare(latest, Version) {
+		case 1:
+			log.Printf("Update available: %s", latest)
+			a.updateMu.Lock()
+			a.updateVersion = latest
+			a.updatePhase = updatePhaseReady
+			a.updateMu.Unlock()
+			a.mCheckUpdate.SetTitle(fmt.Sprintf("Update available: %s (current: %s)", latest, Version))
+		case -1:
+			log.Printf("Newer than latest release (%s)", latest)
+			a.mCheckUpdate.SetTitle(fmt.Sprintf("Newer than latest release (%s)", latest))
+		default:
+			log.Printf("Up to date (%s)", Version)
+			a.mCheckUpdate.SetTitle(fmt.Sprintf("Up to date (%s)", Version))
+		}
+	}()
+}
+
+// doApplyUpdate downloads and applies the given version.
+func (a *App) doApplyUpdate(version string) {
+	a.mCheckUpdate.SetTitle(fmt.Sprintf("Updating to %s...", version))
+	a.mCheckUpdate.Disable()
+	go func() {
+		if err := applyUpdate(version); err != nil {
+			log.Printf("Update error: %v", err)
+			a.mCheckUpdate.SetTitle(fmt.Sprintf("Update failed: %v", err))
+			// Reset to ready so user can retry.
+			a.updateMu.Lock()
+			a.updatePhase = updatePhaseReady
+			a.updateMu.Unlock()
+			a.mCheckUpdate.Enable()
+			return
+		}
+		a.updateMu.Lock()
+		a.updatePhase = updatePhaseApplied
+		a.updateMu.Unlock()
+		a.mCheckUpdate.SetTitle("Restart to apply update")
+		a.mCheckUpdate.Enable()
+	}()
 }
 
 // buildTooltip generates tooltip text from state.
