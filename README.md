@@ -98,6 +98,7 @@ For a release build with version info and cross-compilation:
 ./claude-quota -font-size 24
 ./claude-quota -font-name bitmap  # pixel-crisp bitmap font
 ./claude-quota -icon-size 128     # for HiDPI / large systray panels
+./claude-quota -provider-mark -provider-mark-position se
 ./claude-quota -indicator bar     # vertical bar indicator
 ./claude-quota -indicator arc     # progress ring indicator
 ./claude-quota -indicator bar-proj # side-by-side bar with burn-rate projection
@@ -122,6 +123,10 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
   "indicator": "pie",
   "show_text": true,
   "show_account": false,
+  "provider_mark": false,
+  "provider_mark_size": 14,
+  "provider_mark_position": "SE",
+  "show_account": false,
   "thresholds": {
     "warning": 60,
     "critical": 85
@@ -141,6 +146,9 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
 | Icon size (px)          | `icon_size`             | `CLAUDE_QUOTA_ICON_SIZE`          | `-icon-size`          | `64`     |
 | Indicator style         | `indicator`             | `CLAUDE_QUOTA_INDICATOR`          | `-indicator`          | `"pie"`  |
 | Show text on icon       | `show_text`             | `CLAUDE_QUOTA_SHOW_TEXT`          | `-show-text`          | `true`   |
+| Provider mark           | `provider_mark`         | `CLAUDE_QUOTA_PROVIDER_MARK`      | `-provider-mark`      | `false`  |
+| Provider mark size      | `provider_mark_size`    | `CLAUDE_QUOTA_PROVIDER_MARK_SIZE` | `-provider-mark-size` | `14`     |
+| Provider mark position  | `provider_mark_position`| `CLAUDE_QUOTA_PROVIDER_MARK_POSITION` | `-provider-mark-position` | `"SE"` |
 | Show account in menu    | `show_account`          | `CLAUDE_QUOTA_SHOW_ACCOUNT`       | `-show-account`       | `false`  |
 | Local stats collection  | `stats`                 | `CLAUDE_QUOTA_STATS`              | `-stats`              | `false`  |
 | Warning threshold (%)   | `thresholds.warning`    | `CLAUDE_QUOTA_WARNING_THRESHOLD`  | `-warning-threshold`  | `60`     |

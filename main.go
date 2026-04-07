@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -54,6 +55,9 @@ func main() {
 	fontName := flag.String("font-name", "", "icon font name: bold, regular, mono, monobold, bitmap (env: CLAUDE_QUOTA_FONT_NAME)")
 	haloSize := flag.Float64("halo-size", -1, "text halo/outline size in pixels, 0 to disable (env: CLAUDE_QUOTA_HALO_SIZE)")
 	iconSize := flag.Int("icon-size", 0, "icon size in pixels (env: CLAUDE_QUOTA_ICON_SIZE)")
+	providerMark := flag.Bool("provider-mark", false, "show provider accent mark on icon (env: CLAUDE_QUOTA_PROVIDER_MARK)")
+	providerMarkSize := flag.Float64("provider-mark-size", 0, "provider accent mark size in base pixels (env: CLAUDE_QUOTA_PROVIDER_MARK_SIZE)")
+	providerMarkPosition := flag.String("provider-mark-position", "", "provider accent position: NW, NE, SW, SE (env: CLAUDE_QUOTA_PROVIDER_MARK_POSITION)")
 	warningThreshold := flag.Float64("warning-threshold", 0, "warning utilization threshold in % (env: CLAUDE_QUOTA_WARNING_THRESHOLD)")
 	criticalThreshold := flag.Float64("critical-threshold", 0, "critical utilization threshold in % (env: CLAUDE_QUOTA_CRITICAL_THRESHOLD)")
 	indicator := flag.String("indicator", "", "indicator type: pie, bar, arc, bar-proj (env: CLAUDE_QUOTA_INDICATOR)")
@@ -145,6 +149,7 @@ func main() {
 	var showTextOverride *bool
 	var showAccountOverride *bool
 	var statsOverride *bool
+	var providerMarkOverride *bool
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "show-text" {
 			showTextOverride = showText
@@ -155,21 +160,27 @@ func main() {
 		if f.Name == "stats" {
 			statsOverride = stats
 		}
+		if f.Name == "provider-mark" {
+			providerMarkOverride = providerMark
+		}
 	})
 
 	applyOverrides(&cfg, overrides{
-		Provider:          *providerFlag,
-		PollInterval:      *pollInterval,
-		FontSize:          *fontSize,
-		FontName:          *fontName,
-		HaloSize:          *haloSize,
-		IconSize:          *iconSize,
-		Indicator:         *indicator,
-		ShowText:          showTextOverride,
-		ShowAccount:       showAccountOverride,
-		Stats:             statsOverride,
-		WarningThreshold:  *warningThreshold,
-		CriticalThreshold: *criticalThreshold,
+		Provider:             *providerFlag,
+		PollInterval:         *pollInterval,
+		FontSize:             *fontSize,
+		FontName:             *fontName,
+		HaloSize:             *haloSize,
+		IconSize:             *iconSize,
+		ProviderMark:         providerMarkOverride,
+		ProviderMarkSize:     *providerMarkSize,
+		ProviderMarkPosition: *providerMarkPosition,
+		Indicator:            *indicator,
+		ShowText:             showTextOverride,
+		ShowAccount:          showAccountOverride,
+		Stats:                statsOverride,
+		WarningThreshold:     *warningThreshold,
+		CriticalThreshold:    *criticalThreshold,
 	})
 
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -227,18 +238,21 @@ func main() {
 
 // overrides holds CLI flag values for config overrides.
 type overrides struct {
-	Provider          string
-	PollInterval      int
-	FontSize          float64
-	FontName          string
-	HaloSize          float64
-	IconSize          int
-	Indicator         string
-	ShowText          *bool
-	ShowAccount       *bool
-	Stats             *bool
-	WarningThreshold  float64
-	CriticalThreshold float64
+	Provider             string
+	PollInterval         int
+	FontSize             float64
+	FontName             string
+	HaloSize             float64
+	IconSize             int
+	ProviderMark         *bool
+	ProviderMarkSize     float64
+	ProviderMarkPosition string
+	Indicator            string
+	ShowText             *bool
+	ShowAccount          *bool
+	Stats                *bool
+	WarningThreshold     float64
+	CriticalThreshold    float64
 }
 
 // applyIntOverride applies an int override from env var and flag.
@@ -292,6 +306,12 @@ func applyStringOverride(target *string, envKey, flagName, flagVal string, valid
 
 // applyOverrides applies env vars and flags to config. Priority: flag > env > config file.
 func applyOverrides(cfg *Config, o overrides) {
+	if cfg.ProviderMarkSize <= 0 {
+		cfg.ProviderMarkSize = defaultConfig().ProviderMarkSize
+	}
+	if cfg.ProviderMarkPosition == "" {
+		cfg.ProviderMarkPosition = defaultConfig().ProviderMarkPosition
+	}
 	applyStringOverride(&cfg.Provider, "CLAUDE_QUOTA_PROVIDER", "provider", o.Provider, ValidProviderName)
 	if cfg.Provider != "" {
 		cfg.Provider = string(normalizeProvider(cfg.Provider))
@@ -305,6 +325,12 @@ func applyOverrides(cfg *Config, o overrides) {
 		func(f float64) bool { return f >= 0 })
 	applyIntOverride(&cfg.IconSize, "CLAUDE_QUOTA_ICON_SIZE", o.IconSize,
 		func(i int) bool { return i > 0 })
+	applyFloatOverride(&cfg.ProviderMarkSize, "CLAUDE_QUOTA_PROVIDER_MARK_SIZE", o.ProviderMarkSize, o.ProviderMarkSize > 0,
+		func(f float64) bool { return f > 0 })
+	applyStringOverride(&cfg.ProviderMarkPosition, "CLAUDE_QUOTA_PROVIDER_MARK_POSITION", "provider-mark-position", o.ProviderMarkPosition, ValidProviderMarkPosition)
+	if cfg.ProviderMarkPosition != "" {
+		cfg.ProviderMarkPosition = strings.ToUpper(cfg.ProviderMarkPosition)
+	}
 	applyStringOverride(&cfg.Indicator, "CLAUDE_QUOTA_INDICATOR", "indicator", o.Indicator, ValidIndicatorName)
 
 	// ShowText: unique tri-state parsing (true/1, false/0).
@@ -322,6 +348,20 @@ func applyOverrides(cfg *Config, o overrides) {
 	}
 	if o.ShowText != nil {
 		cfg.ShowText = o.ShowText
+	}
+
+	if v := os.Getenv("CLAUDE_QUOTA_PROVIDER_MARK"); v != "" {
+		switch v {
+		case "true", "1":
+			cfg.ProviderMark = true
+		case "false", "0":
+			cfg.ProviderMark = false
+		default:
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_PROVIDER_MARK=%q", v)
+		}
+	}
+	if o.ProviderMark != nil {
+		cfg.ProviderMark = *o.ProviderMark
 	}
 
 	// ShowAccount: env < flag.

@@ -8,12 +8,15 @@ import (
 // testOpts returns RenderOptions with common test defaults.
 func testOpts() RenderOptions {
 	return RenderOptions{
-		FontSize:  34,
-		IconSize:  64,
-		FontName:  "bold",
-		HaloSize:  2,
-		Indicator: "pie",
-		ShowText:  true,
+		FontSize:             34,
+		IconSize:             64,
+		FontName:             "bold",
+		HaloSize:             2,
+		Indicator:            "pie",
+		ShowText:             true,
+		ProviderMark:         false,
+		ProviderMarkSize:     14,
+		ProviderMarkPosition: "SE",
 	}
 }
 
@@ -98,7 +101,7 @@ func TestColorForUtilization_ZeroBoundary(t *testing.T) {
 
 func TestRenderIcon_ProducesImage(t *testing.T) {
 	v := 42.0
-	state := QuotaState{FiveHour: &v}
+	state := QuotaState{Provider: ProviderClaude, FiveHour: &v}
 	th := Thresholds{Warning: 60, Critical: 85}
 	img := renderIcon(state, th, testOpts())
 	bounds := img.Bounds()
@@ -156,7 +159,7 @@ func TestRenderIcon_TokenExpired(t *testing.T) {
 
 func TestRenderIcon_CustomSize(t *testing.T) {
 	v := 50.0
-	state := QuotaState{FiveHour: &v}
+	state := QuotaState{Provider: ProviderClaude, FiveHour: &v}
 	th := Thresholds{Warning: 60, Critical: 85}
 	opts := testOpts()
 	opts.IconSize = 128
@@ -193,7 +196,7 @@ func TestRenderIcon_CustomSize_Expired(t *testing.T) {
 
 func TestRenderIcon_SmallSize(t *testing.T) {
 	v := 75.0
-	state := QuotaState{FiveHour: &v}
+	state := QuotaState{Provider: ProviderClaude, FiveHour: &v}
 	th := Thresholds{Warning: 60, Critical: 85}
 	opts := testOpts()
 	opts.IconSize = 24
@@ -218,7 +221,7 @@ func TestRenderIcon_SmallSize_Expired(t *testing.T) {
 
 func TestRenderIcon_BitmapFont(t *testing.T) {
 	v := 42.0
-	state := QuotaState{FiveHour: &v}
+	state := QuotaState{Provider: ProviderClaude, FiveHour: &v}
 	th := Thresholds{Warning: 60, Critical: 85}
 	opts := testOpts()
 	opts.FontSize = 18
@@ -232,7 +235,7 @@ func TestRenderIcon_BitmapFont(t *testing.T) {
 
 func TestRenderIcon_MonoFont(t *testing.T) {
 	v := 42.0
-	state := QuotaState{FiveHour: &v}
+	state := QuotaState{Provider: ProviderClaude, FiveHour: &v}
 	th := Thresholds{Warning: 60, Critical: 85}
 	opts := testOpts()
 	opts.FontName = "mono"
@@ -246,7 +249,7 @@ func TestRenderIcon_MonoFont(t *testing.T) {
 func TestRenderIcon_BitmapScaling(t *testing.T) {
 	for _, size := range []int{24, 32, 48, 64, 128} {
 		v := 42.0
-		state := QuotaState{FiveHour: &v}
+		state := QuotaState{Provider: ProviderClaude, FiveHour: &v}
 		th := Thresholds{Warning: 60, Critical: 85}
 		opts := testOpts()
 		opts.FontSize = 18
@@ -263,7 +266,7 @@ func TestRenderIcon_BitmapScaling(t *testing.T) {
 
 func TestRenderIcon_NoHalo(t *testing.T) {
 	v := 42.0
-	state := QuotaState{FiveHour: &v}
+	state := QuotaState{Provider: ProviderClaude, FiveHour: &v}
 	th := Thresholds{Warning: 60, Critical: 85}
 	opts := testOpts()
 	opts.HaloSize = 0
@@ -276,7 +279,7 @@ func TestRenderIcon_NoHalo(t *testing.T) {
 
 func TestRenderIcon_LargeHalo(t *testing.T) {
 	v := 42.0
-	state := QuotaState{FiveHour: &v}
+	state := QuotaState{Provider: ProviderClaude, FiveHour: &v}
 	th := Thresholds{Warning: 60, Critical: 85}
 	opts := testOpts()
 	opts.HaloSize = 3.0
@@ -333,9 +336,163 @@ func TestValidIndicatorName(t *testing.T) {
 	}
 }
 
+func TestProviderAccentColor(t *testing.T) {
+	if got := providerAccentColor(ProviderClaude); got != (color.RGBA{255, 140, 0, 255}) {
+		t.Fatalf("providerAccentColor(claude) = %v, want orange", got)
+	}
+	if got := providerAccentColor(ProviderCodex); got != (color.RGBA{120, 120, 120, 255}) {
+		t.Fatalf("providerAccentColor(codex) = %v, want gray", got)
+	}
+	if got := providerAccentColor(""); got != (color.RGBA{90, 90, 90, 255}) {
+		t.Fatalf("providerAccentColor(\"\") = %v, want fallback gray", got)
+	}
+}
+
+func TestRenderIcon_ProviderMarkDisabledDoesNotChangeIcon(t *testing.T) {
+	v := 42.0
+	th := Thresholds{Warning: 60, Critical: 85}
+	opts := testOpts()
+
+	claudeImg := renderIcon(QuotaState{Provider: ProviderClaude, FiveHour: &v}, th, opts)
+	codexImg := renderIcon(QuotaState{Provider: ProviderCodex, FiveHour: &v}, th, opts)
+
+	claudeData, err := encodePNG(claudeImg)
+	if err != nil {
+		t.Fatalf("encodePNG claude: %v", err)
+	}
+	codexData, err := encodePNG(codexImg)
+	if err != nil {
+		t.Fatalf("encodePNG codex: %v", err)
+	}
+	if string(claudeData) != string(codexData) {
+		t.Fatal("provider mark disabled should not change icon rendering")
+	}
+}
+
+func TestRenderIcon_ProviderAccentDiffers(t *testing.T) {
+	v := 42.0
+	th := Thresholds{Warning: 60, Critical: 85}
+	opts := testOpts()
+	opts.ProviderMark = true
+
+	claudeImg := renderIcon(QuotaState{Provider: ProviderClaude, FiveHour: &v}, th, opts)
+	codexImg := renderIcon(QuotaState{Provider: ProviderCodex, FiveHour: &v}, th, opts)
+
+	claudeData, err := encodePNG(claudeImg)
+	if err != nil {
+		t.Fatalf("encodePNG claude: %v", err)
+	}
+	codexData, err := encodePNG(codexImg)
+	if err != nil {
+		t.Fatalf("encodePNG codex: %v", err)
+	}
+	if string(claudeData) == string(codexData) {
+		t.Fatal("provider accent should make Claude and Codex icons differ")
+	}
+}
+
+func TestRenderIcon_ProviderAccentDiffersInErrorState(t *testing.T) {
+	th := Thresholds{Warning: 60, Critical: 85}
+	opts := testOpts()
+	opts.ProviderMark = true
+
+	claudeImg := renderIcon(QuotaState{Provider: ProviderClaude, Error: "something broke"}, th, opts)
+	codexImg := renderIcon(QuotaState{Provider: ProviderCodex, Error: "something broke"}, th, opts)
+
+	claudeData, err := encodePNG(claudeImg)
+	if err != nil {
+		t.Fatalf("encodePNG claude: %v", err)
+	}
+	codexData, err := encodePNG(codexImg)
+	if err != nil {
+		t.Fatalf("encodePNG codex: %v", err)
+	}
+	if string(claudeData) == string(codexData) {
+		t.Fatal("provider accent should make Claude and Codex error icons differ")
+	}
+}
+
+func TestRenderIcon_ProviderAccentDiffersInExpiredState(t *testing.T) {
+	th := Thresholds{Warning: 60, Critical: 85}
+	opts := testOpts()
+	opts.ProviderMark = true
+
+	claudeImg := renderIcon(QuotaState{
+		Provider:     ProviderClaude,
+		Error:        "OAuth token has expired",
+		TokenExpired: true,
+	}, th, opts)
+	codexImg := renderIcon(QuotaState{
+		Provider:     ProviderCodex,
+		Error:        "OAuth token has expired",
+		TokenExpired: true,
+	}, th, opts)
+
+	claudeData, err := encodePNG(claudeImg)
+	if err != nil {
+		t.Fatalf("encodePNG claude: %v", err)
+	}
+	codexData, err := encodePNG(codexImg)
+	if err != nil {
+		t.Fatalf("encodePNG codex: %v", err)
+	}
+	if string(claudeData) == string(codexData) {
+		t.Fatal("provider accent should make Claude and Codex expired icons differ")
+	}
+}
+
+func TestValidProviderMarkPosition(t *testing.T) {
+	for _, pos := range []string{"NW", "NE", "SW", "SE"} {
+		if !ValidProviderMarkPosition(pos) {
+			t.Fatalf("ValidProviderMarkPosition(%q) = false", pos)
+		}
+	}
+	for _, pos := range []string{"", "north", "center", "ss"} {
+		if ValidProviderMarkPosition(pos) {
+			t.Fatalf("ValidProviderMarkPosition(%q) = true", pos)
+		}
+	}
+}
+
+func TestRenderIcon_ProviderMarkPositionsDiffer(t *testing.T) {
+	v := 42.0
+	th := Thresholds{Warning: 60, Critical: 85}
+
+	nw := testOpts()
+	nw.ProviderMark = true
+	nw.ProviderMarkPosition = "NW"
+	se := testOpts()
+	se.ProviderMark = true
+	se.ProviderMarkPosition = "SE"
+
+	nwData, _ := encodePNG(renderIcon(QuotaState{Provider: ProviderClaude, FiveHour: &v}, th, nw))
+	seData, _ := encodePNG(renderIcon(QuotaState{Provider: ProviderClaude, FiveHour: &v}, th, se))
+	if string(nwData) == string(seData) {
+		t.Fatal("different provider mark positions should render differently")
+	}
+}
+
+func TestRenderIcon_ProviderMarkSizeDiffers(t *testing.T) {
+	v := 42.0
+	th := Thresholds{Warning: 60, Critical: 85}
+
+	small := testOpts()
+	small.ProviderMark = true
+	small.ProviderMarkSize = 12
+	large := testOpts()
+	large.ProviderMark = true
+	large.ProviderMarkSize = 18
+
+	smallData, _ := encodePNG(renderIcon(QuotaState{Provider: ProviderClaude, FiveHour: &v}, th, small))
+	largeData, _ := encodePNG(renderIcon(QuotaState{Provider: ProviderClaude, FiveHour: &v}, th, large))
+	if string(smallData) == string(largeData) {
+		t.Fatal("different provider mark sizes should render differently")
+	}
+}
+
 func TestRenderIcon_BarIndicator(t *testing.T) {
 	v := 42.0
-	state := QuotaState{FiveHour: &v}
+	state := QuotaState{Provider: ProviderClaude, FiveHour: &v}
 	th := Thresholds{Warning: 60, Critical: 85}
 	opts := testOpts()
 	opts.Indicator = "bar"
@@ -360,7 +517,7 @@ func TestRenderIcon_BarIndicator_NilUtilization(t *testing.T) {
 
 func TestRenderIcon_ArcIndicator(t *testing.T) {
 	v := 42.0
-	state := QuotaState{FiveHour: &v}
+	state := QuotaState{Provider: ProviderClaude, FiveHour: &v}
 	th := Thresholds{Warning: 60, Critical: 85}
 	opts := testOpts()
 	opts.Indicator = "arc"
@@ -385,7 +542,7 @@ func TestRenderIcon_ArcIndicator_NilUtilization(t *testing.T) {
 
 func TestRenderIcon_IndicatorsDiffer(t *testing.T) {
 	v := 50.0
-	state := QuotaState{FiveHour: &v}
+	state := QuotaState{Provider: ProviderClaude, FiveHour: &v}
 	th := Thresholds{Warning: 60, Critical: 85}
 
 	pieOpts := testOpts()
@@ -415,7 +572,7 @@ func TestRenderIcon_IndicatorsDiffer(t *testing.T) {
 
 func TestRenderIcon_ShowTextFalse(t *testing.T) {
 	v := 42.0
-	state := QuotaState{FiveHour: &v}
+	state := QuotaState{Provider: ProviderClaude, FiveHour: &v}
 	th := Thresholds{Warning: 60, Critical: 85}
 
 	for _, ind := range []string{"pie", "bar", "arc"} {

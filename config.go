@@ -6,23 +6,27 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Config holds the widget configuration.
 type Config struct {
-	Provider            string     `json:"provider,omitempty"`
-	ClaudeHome          string     `json:"claude_home,omitempty"`
-	CodexHome           string     `json:"codex_home,omitempty"`
-	PollIntervalSeconds int        `json:"poll_interval_seconds"`
-	FontSize            float64    `json:"font_size"`
-	FontName            string     `json:"font_name"`
-	HaloSize            float64    `json:"halo_size"`
-	IconSize            int        `json:"icon_size"`
-	Indicator           string     `json:"indicator"`
-	ShowText            *bool      `json:"show_text"`
-	ShowAccount         bool       `json:"show_account"`
-	Stats               bool       `json:"stats"`
-	Thresholds          Thresholds `json:"thresholds"`
+	Provider             string     `json:"provider,omitempty"`
+	ClaudeHome           string     `json:"claude_home,omitempty"`
+	CodexHome            string     `json:"codex_home,omitempty"`
+	PollIntervalSeconds  int        `json:"poll_interval_seconds"`
+	FontSize             float64    `json:"font_size"`
+	FontName             string     `json:"font_name"`
+	HaloSize             float64    `json:"halo_size"`
+	IconSize             int        `json:"icon_size"`
+	Indicator            string     `json:"indicator"`
+	ShowText             *bool      `json:"show_text"`
+	ProviderMark         bool       `json:"provider_mark"`
+	ProviderMarkSize     float64    `json:"provider_mark_size"`
+	ProviderMarkPosition string     `json:"provider_mark_position"`
+	ShowAccount          bool       `json:"show_account"`
+	Stats                bool       `json:"stats"`
+	Thresholds           Thresholds `json:"thresholds"`
 }
 
 // Thresholds defines warning/critical utilization levels.
@@ -45,13 +49,17 @@ func init() {
 func defaultConfig() Config {
 	showText := true
 	return Config{
-		PollIntervalSeconds: 300,
-		FontSize:            34,
-		FontName:            "bold",
-		HaloSize:            2,
-		IconSize:            64,
-		Indicator:           "pie",
-		ShowText:            &showText,
+		PollIntervalSeconds:  300,
+		FontSize:             34,
+		FontName:             "bold",
+		HaloSize:             2,
+		IconSize:             64,
+		Indicator:            "pie",
+		ShowText:             &showText,
+		ProviderMark:         false,
+		ProviderMarkSize:     14,
+		ProviderMarkPosition: "SE",
+		ShowAccount:          false,
 		Thresholds: Thresholds{
 			Warning:  60,
 			Critical: 85,
@@ -129,6 +137,20 @@ func loadConfigWithMode(createDefault bool) Config {
 	}
 	if cfg.ShowText == nil {
 		cfg.ShowText = defaults.ShowText
+	}
+	if cfg.ProviderMarkSize <= 0 {
+		if cfg.ProviderMarkSize != 0 {
+			log.Printf("Invalid provider_mark_size %v in config, using default %v", cfg.ProviderMarkSize, defaults.ProviderMarkSize)
+		}
+		cfg.ProviderMarkSize = defaults.ProviderMarkSize
+	}
+	if cfg.ProviderMarkPosition == "" || !ValidProviderMarkPosition(cfg.ProviderMarkPosition) {
+		if cfg.ProviderMarkPosition != "" {
+			log.Printf("Unknown provider_mark_position %q in config, using default %q", cfg.ProviderMarkPosition, defaults.ProviderMarkPosition)
+		}
+		cfg.ProviderMarkPosition = defaults.ProviderMarkPosition
+	} else {
+		cfg.ProviderMarkPosition = strings.ToUpper(cfg.ProviderMarkPosition)
 	}
 	if cfg.Provider != "" {
 		if !ValidProviderName(cfg.Provider) {

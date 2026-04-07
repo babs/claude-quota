@@ -41,6 +41,7 @@ type App struct {
 	// Menu items updated dynamically.
 	mAccountEmail       *systray.MenuItem
 	mAccountOrg         *systray.MenuItem
+	mProvider           *systray.MenuItem
 	mFiveHour           *systray.MenuItem
 	mProjection         *systray.MenuItem
 	mSaturation         *systray.MenuItem
@@ -97,6 +98,8 @@ func (a *App) onReady() {
 		a.mAccountOrg.Disable()
 		a.mAccountOrg.Hide()
 	}
+	a.mProvider = systray.AddMenuItem(fmt.Sprintf("Provider: %s", providerDisplayName(a.creds.Provider())), "Active quota provider")
+	a.mProvider.Disable()
 	a.mFiveHour = systray.AddMenuItem("5h: --", "5-hour quota")
 	a.mFiveHour.Disable()
 	a.mProjection = systray.AddMenuItem("", "Projected utilization at reset")
@@ -279,12 +282,15 @@ func (a *App) updateUI() {
 
 	// Update icon.
 	img := renderIcon(state, a.config.Thresholds, RenderOptions{
-		FontSize:  a.config.FontSize,
-		IconSize:  a.config.IconSize,
-		FontName:  a.config.FontName,
-		HaloSize:  a.config.HaloSize,
-		Indicator: a.config.Indicator,
-		ShowText:  configShowText(a.config),
+		FontSize:             a.config.FontSize,
+		IconSize:             a.config.IconSize,
+		FontName:             a.config.FontName,
+		HaloSize:             a.config.HaloSize,
+		Indicator:            a.config.Indicator,
+		ShowText:             configShowText(a.config),
+		ProviderMark:         a.config.ProviderMark,
+		ProviderMarkSize:     a.config.ProviderMarkSize,
+		ProviderMarkPosition: a.config.ProviderMarkPosition,
 	})
 	iconData, err := iconToBytes(img)
 	if err != nil {
@@ -312,6 +318,10 @@ func (a *App) updateUI() {
 		} else {
 			a.mAccountOrg.Hide()
 		}
+	}
+	a.mProvider.SetTitle(fmt.Sprintf("Provider: %s", providerDisplayName(state.Provider)))
+	if a.mProvider != nil {
+		a.mProvider.SetTitle(fmt.Sprintf("Provider: %s", providerDisplayName(state.Provider)))
 	}
 	a.mFiveHour.SetTitle(formatQuotaLine("5h", state.FiveHour, state.FiveHourResets))
 	if state.FiveHour != nil {

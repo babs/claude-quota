@@ -88,6 +88,15 @@ func TestLoadConfig_PartialFile(t *testing.T) {
 	if cfg.FontSize != 34 {
 		t.Errorf("FontSize = %f, want 34 (default)", cfg.FontSize)
 	}
+	if cfg.ProviderMark {
+		t.Errorf("ProviderMark = %v, want false (default)", cfg.ProviderMark)
+	}
+	if cfg.ProviderMarkSize != 14 {
+		t.Errorf("ProviderMarkSize = %f, want 14 (default)", cfg.ProviderMarkSize)
+	}
+	if cfg.ProviderMarkPosition != "SE" {
+		t.Errorf("ProviderMarkPosition = %q, want SE (default)", cfg.ProviderMarkPosition)
+	}
 }
 
 func TestLoadConfig_InvalidJSON(t *testing.T) {

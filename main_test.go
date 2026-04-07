@@ -57,6 +57,9 @@ func TestApplyOverrides_EnvVars(t *testing.T) {
 	t.Setenv("CLAUDE_QUOTA_FONT_NAME", "bitmap")
 	t.Setenv("CLAUDE_QUOTA_HALO_SIZE", "2.5")
 	t.Setenv("CLAUDE_QUOTA_ICON_SIZE", "128")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK", "true")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK_SIZE", "16")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK_POSITION", "nw")
 
 	cfg := defaultConfig()
 	applyOverrides(&cfg, noOverrides)
@@ -75,6 +78,15 @@ func TestApplyOverrides_EnvVars(t *testing.T) {
 	if cfg.IconSize != 128 {
 		t.Errorf("IconSize = %d, want 128", cfg.IconSize)
 	}
+	if !cfg.ProviderMark {
+		t.Errorf("ProviderMark = %v, want true", cfg.ProviderMark)
+	}
+	if cfg.ProviderMarkSize != 16 {
+		t.Errorf("ProviderMarkSize = %f, want 16", cfg.ProviderMarkSize)
+	}
+	if cfg.ProviderMarkPosition != "NW" {
+		t.Errorf("ProviderMarkPosition = %q, want NW", cfg.ProviderMarkPosition)
+	}
 }
 
 func TestApplyOverrides_FlagOverridesEnv(t *testing.T) {
@@ -83,11 +95,15 @@ func TestApplyOverrides_FlagOverridesEnv(t *testing.T) {
 	t.Setenv("CLAUDE_QUOTA_FONT_NAME", "bitmap")
 	t.Setenv("CLAUDE_QUOTA_HALO_SIZE", "2.5")
 	t.Setenv("CLAUDE_QUOTA_ICON_SIZE", "128")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK", "false")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK_SIZE", "12")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK_POSITION", "nw")
 
 	cfg := defaultConfig()
 	applyOverrides(&cfg, overrides{
 		PollInterval: 60, FontSize: 24, FontName: "mono",
 		HaloSize: 0.5, IconSize: 256,
+		ProviderMark: boolPtr(true), ProviderMarkSize: 18, ProviderMarkPosition: "se",
 	})
 	if cfg.PollIntervalSeconds != 60 {
 		t.Errorf("PollIntervalSeconds = %d, want 60 (flag should override env)", cfg.PollIntervalSeconds)
@@ -104,6 +120,15 @@ func TestApplyOverrides_FlagOverridesEnv(t *testing.T) {
 	if cfg.IconSize != 256 {
 		t.Errorf("IconSize = %d, want 256 (flag should override env)", cfg.IconSize)
 	}
+	if !cfg.ProviderMark {
+		t.Errorf("ProviderMark = %v, want true (flag should override env)", cfg.ProviderMark)
+	}
+	if cfg.ProviderMarkSize != 18 {
+		t.Errorf("ProviderMarkSize = %f, want 18", cfg.ProviderMarkSize)
+	}
+	if cfg.ProviderMarkPosition != "SE" {
+		t.Errorf("ProviderMarkPosition = %q, want SE", cfg.ProviderMarkPosition)
+	}
 }
 
 func TestApplyOverrides_InvalidEnvIgnored(t *testing.T) {
@@ -112,6 +137,9 @@ func TestApplyOverrides_InvalidEnvIgnored(t *testing.T) {
 	t.Setenv("CLAUDE_QUOTA_FONT_NAME", "comic-sans")
 	t.Setenv("CLAUDE_QUOTA_HALO_SIZE", "-2")
 	t.Setenv("CLAUDE_QUOTA_ICON_SIZE", "-10")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK", "maybe")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK_SIZE", "-2")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK_POSITION", "center")
 
 	cfg := defaultConfig()
 	applyOverrides(&cfg, noOverrides)
@@ -130,13 +158,25 @@ func TestApplyOverrides_InvalidEnvIgnored(t *testing.T) {
 	if cfg.IconSize != 64 {
 		t.Errorf("IconSize = %d, want 64 (invalid env should be ignored)", cfg.IconSize)
 	}
+	if cfg.ProviderMark {
+		t.Errorf("ProviderMark = %v, want false", cfg.ProviderMark)
+	}
+	if cfg.ProviderMarkSize != 14 {
+		t.Errorf("ProviderMarkSize = %f, want 14", cfg.ProviderMarkSize)
+	}
+	if cfg.ProviderMarkPosition != "SE" {
+		t.Errorf("ProviderMarkPosition = %q, want SE", cfg.ProviderMarkPosition)
+	}
 }
 
 func TestApplyOverrides_InvalidFlagIgnored(t *testing.T) {
 	cfg := defaultConfig()
-	applyOverrides(&cfg, overrides{FontName: "unknown-font", HaloSize: -1})
+	applyOverrides(&cfg, overrides{FontName: "unknown-font", HaloSize: -1, ProviderMarkPosition: "middle"})
 	if cfg.FontName != "bold" {
 		t.Errorf("FontName = %q, want %q (invalid flag should be ignored)", cfg.FontName, "bold")
+	}
+	if cfg.ProviderMarkPosition != "SE" {
+		t.Errorf("ProviderMarkPosition = %q, want SE (invalid flag should be ignored)", cfg.ProviderMarkPosition)
 	}
 }
 
