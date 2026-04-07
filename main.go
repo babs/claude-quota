@@ -47,6 +47,8 @@ func main() {
 
 	showVersion := flag.Bool("version", false, "show version and exit")
 	doUpdate := flag.Bool("update", false, "check and update to latest release")
+	dryRun := flag.Bool("dry-run", false, "fetch quota once, print results, and exit without touching config, stats, or tray")
+	providerFlag := flag.String("provider", "", "quota provider: claude or codex (env: CLAUDE_QUOTA_PROVIDER)")
 	pollInterval := flag.Int("poll-interval", 0, "poll interval in seconds (env: CLAUDE_QUOTA_POLL_INTERVAL)")
 	fontSize := flag.Float64("font-size", 0, "icon font size (env: CLAUDE_QUOTA_FONT_SIZE)")
 	fontName := flag.String("font-name", "", "icon font name: bold, regular, mono, monobold, bitmap (env: CLAUDE_QUOTA_FONT_NAME)")
@@ -59,6 +61,7 @@ func main() {
 	showAccount := flag.Bool("show-account", false, "show account info in menu (env: CLAUDE_QUOTA_SHOW_ACCOUNT)")
 	stats := flag.Bool("stats", false, "enable local stats collection (env: CLAUDE_QUOTA_STATS)")
 	claudeHome := flag.String("claude-home", "", "home directory for Claude credentials (env: CLAUDE_QUOTA_CLAUDE_HOME)")
+	codexHome := flag.String("codex-home", "", "home directory for Codex credentials (env: CLAUDE_QUOTA_CODEX_HOME)")
 	flag.Usage = func() {
 		fmt.Print(versionStringLong())
 		fmt.Fprintf(os.Stderr, "\nUsage: %s [options]\n\nOptions:\n", os.Args[0])
@@ -76,28 +79,64 @@ func main() {
 		return
 	}
 
-	cfg := loadConfig()
+	cfg := loadConfigWithMode(!*dryRun)
 
-	// Resolve claude-home: config < env < flag.
+	provider := defaultProvider()
+	if cfg.Provider != "" {
+		provider = normalizeProvider(cfg.Provider)
+	}
+	if v := os.Getenv("CLAUDE_QUOTA_PROVIDER"); v != "" {
+		if ValidProviderName(v) {
+			provider = normalizeProvider(v)
+		} else {
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_PROVIDER=%q", v)
+		}
+	}
+	if *providerFlag != "" {
+		if ValidProviderName(*providerFlag) {
+			provider = normalizeProvider(*providerFlag)
+		} else {
+			log.Printf("Ignoring invalid -provider=%q", *providerFlag)
+		}
+	}
+
+	// Resolve provider-specific credential paths: config < env < flag.
 	if cfg.ClaudeHome != "" {
-		credentialsPath = filepath.Join(cfg.ClaudeHome, ".claude", ".credentials.json")
+		claudeCredentialsPath = filepath.Join(cfg.ClaudeHome, ".claude", ".credentials.json")
+	}
+	if cfg.CodexHome != "" {
+		codexAuthPath = filepath.Join(cfg.CodexHome, ".codex", "auth.json")
 	}
 	if v := os.Getenv("CLAUDE_QUOTA_CLAUDE_HOME"); v != "" {
-		credentialsPath = filepath.Join(v, ".claude", ".credentials.json")
+		claudeCredentialsPath = filepath.Join(v, ".claude", ".credentials.json")
+	}
+	if v := os.Getenv("CLAUDE_QUOTA_CODEX_HOME"); v != "" {
+		codexAuthPath = filepath.Join(v, ".codex", "auth.json")
 	}
 	if *claudeHome != "" {
-		credentialsPath = filepath.Join(*claudeHome, ".claude", ".credentials.json")
+		claudeCredentialsPath = filepath.Join(*claudeHome, ".claude", ".credentials.json")
+	}
+	if *codexHome != "" {
+		codexAuthPath = filepath.Join(*codexHome, ".codex", "auth.json")
 	}
 
-	fmt.Println("WARNING: This tool uses Claude Code's OAuth client ID to access your")
-	fmt.Println("quota data via an undocumented API. This is not sanctioned by Anthropic")
-	fmt.Println("and may violate the Terms of Service. Use at your own risk.")
-	fmt.Println()
+	authPath := claudeCredentialsPath
+	if provider == ProviderCodex {
+		authPath = codexAuthPath
+	}
 
-	credentialsPreCheck()
+	if provider == ProviderClaude {
+		fmt.Println("WARNING: This tool uses Claude Code credentials to access quota data via")
+		fmt.Println("an undocumented Anthropic API. This is not sanctioned by Anthropic")
+		fmt.Println("and may violate the Terms of Service. Use at your own risk.")
+		fmt.Println()
+	}
+
+	credentialsPreCheck(provider, authPath)
 
 	fmt.Println(versionString())
-	fmt.Printf("Credentials: %s\n", credentialsPath)
+	fmt.Printf("Provider: %s\n", provider)
+	fmt.Printf("Credentials: %s\n", authPath)
 	fmt.Printf("Config: %s\n", configPath)
 
 	// Only pass ShowText when the user explicitly set -show-text.
@@ -119,6 +158,7 @@ func main() {
 	})
 
 	applyOverrides(&cfg, overrides{
+		Provider:          *providerFlag,
 		PollInterval:      *pollInterval,
 		FontSize:          *fontSize,
 		FontName:          *fontName,
@@ -134,10 +174,22 @@ func main() {
 
 	client := &http.Client{Timeout: 30 * time.Second}
 
-	creds, err := NewOAuthCredentials()
+	creds, err := NewOAuthCredentials(provider)
 	if err != nil {
 		fmt.Printf("\nError: %v\n", err)
 		os.Exit(1)
+	}
+
+	if *dryRun {
+		quota := NewQuotaClient(creds, client)
+		if !quota.Fetch() {
+			fmt.Println()
+			fmt.Println(formatDryRunSummary(provider, authPath, quota.State()))
+			os.Exit(1)
+		}
+		fmt.Println()
+		fmt.Println(formatDryRunSummary(provider, authPath, quota.State()))
+		return
 	}
 
 	var statsStore *StatsStore
@@ -153,7 +205,7 @@ func main() {
 		fmt.Println("Stats: disabled")
 	}
 
-	resolver := NewAccountResolver(client, statsStore)
+	resolver := NewAccountResolver(provider, client, statsStore)
 	app := NewApp(cfg, creds, client, statsStore, resolver)
 
 	// Handle interrupt for clean shutdown (SIGINT on all platforms, SIGTERM on Unix).
@@ -175,6 +227,7 @@ func main() {
 
 // overrides holds CLI flag values for config overrides.
 type overrides struct {
+	Provider          string
 	PollInterval      int
 	FontSize          float64
 	FontName          string
@@ -239,6 +292,10 @@ func applyStringOverride(target *string, envKey, flagName, flagVal string, valid
 
 // applyOverrides applies env vars and flags to config. Priority: flag > env > config file.
 func applyOverrides(cfg *Config, o overrides) {
+	applyStringOverride(&cfg.Provider, "CLAUDE_QUOTA_PROVIDER", "provider", o.Provider, ValidProviderName)
+	if cfg.Provider != "" {
+		cfg.Provider = string(normalizeProvider(cfg.Provider))
+	}
 	applyIntOverride(&cfg.PollIntervalSeconds, "CLAUDE_QUOTA_POLL_INTERVAL", o.PollInterval,
 		func(i int) bool { return i > 0 })
 	applyFloatOverride(&cfg.FontSize, "CLAUDE_QUOTA_FONT_SIZE", o.FontSize, o.FontSize > 0,

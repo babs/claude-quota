@@ -2,28 +2,19 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
 
-var ErrTokenExpired = errors.New("OAuth token has expired — run 'claude login' to re-authenticate")
-
-var credentialsPath string
-
-func init() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
-	credentialsPath = filepath.Join(home, ".claude", ".credentials.json")
-}
+var ErrTokenExpired = errors.New("OAuth token expired")
 
 // credentialsFile represents the on-disk ~/.claude/.credentials.json structure.
 type credentialsFile struct {
@@ -36,46 +27,100 @@ type credentialsFile struct {
 	} `json:"claudeAiOauth"`
 }
 
-// OAuthCredentials manages Claude Code OAuth credentials.
+type codexAuthFile struct {
+	AuthMode string `json:"auth_mode"`
+	Tokens   struct {
+		IDToken      string `json:"id_token"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		AccountID    string `json:"account_id"`
+	} `json:"tokens"`
+	LastRefresh string `json:"last_refresh"`
+}
+
+// OAuthCredentials manages Claude Code or Codex OAuth credentials.
 type OAuthCredentials struct {
 	mu               sync.Mutex
+	provider         Provider
+	path             string
 	accessToken      string
 	refreshToken     string
+	accountID        string
 	expiresAt        int64 // ms since epoch
 	subscriptionType string
 	rateLimitTier    string
 }
 
 // NewOAuthCredentials loads credentials from disk and returns a manager.
-func NewOAuthCredentials() (*OAuthCredentials, error) {
-	oc := &OAuthCredentials{}
+func NewOAuthCredentials(provider Provider) (*OAuthCredentials, error) {
+	oc := &OAuthCredentials{provider: provider}
 	if err := oc.load(); err != nil {
 		return nil, err
 	}
 	return oc, nil
 }
 
-// loadFromFile reads credentials from ~/.claude/.credentials.json.
+func (oc *OAuthCredentials) credentialPath() string {
+	if oc.path != "" {
+		return oc.path
+	}
+	if oc.provider == ProviderCodex {
+		return codexAuthPath
+	}
+	return claudeCredentialsPath
+}
+
+func (oc *OAuthCredentials) loginCommand() string {
+	if oc.provider == ProviderCodex {
+		return "codex login"
+	}
+	return "claude login"
+}
+
+// loadFromFile reads provider-specific credentials from disk.
 func (oc *OAuthCredentials) loadFromFile() error {
-	data, err := os.ReadFile(credentialsPath)
+	path := oc.credentialPath()
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("cannot read Claude credentials from %s: %w\nRun 'claude login' to authenticate Claude Code first", credentialsPath, err)
+		return fmt.Errorf("cannot read %s credentials from %s: %w\nRun '%s' to authenticate %s first",
+			providerDisplayName(oc.provider), path, err, oc.loginCommand(), providerDisplayName(oc.provider))
 	}
 
-	var creds credentialsFile
-	if err := json.Unmarshal(data, &creds); err != nil {
-		return fmt.Errorf("cannot parse Claude credentials from %s: %w\nRun 'claude login' to authenticate Claude Code first", credentialsPath, err)
+	switch oc.provider {
+	case ProviderCodex:
+		var auth codexAuthFile
+		if err := json.Unmarshal(data, &auth); err != nil {
+			return fmt.Errorf("cannot parse %s credentials from %s: %w\nRun '%s' to authenticate %s first",
+				providerDisplayName(oc.provider), path, err, oc.loginCommand(), providerDisplayName(oc.provider))
+		}
+		if auth.Tokens.AccessToken == "" {
+			return fmt.Errorf("missing OAuth access token in %s\nRun '%s' to authenticate %s first",
+				path, oc.loginCommand(), providerDisplayName(oc.provider))
+		}
+		oc.accessToken = auth.Tokens.AccessToken
+		oc.refreshToken = auth.Tokens.RefreshToken
+		oc.accountID = auth.Tokens.AccountID
+		oc.expiresAt = jwtExpiryMillis(auth.Tokens.AccessToken)
+		oc.subscriptionType = auth.AuthMode
+		oc.rateLimitTier = ""
+	default:
+		var creds credentialsFile
+		if err := json.Unmarshal(data, &creds); err != nil {
+			return fmt.Errorf("cannot parse %s credentials from %s: %w\nRun '%s' to authenticate %s first",
+				providerDisplayName(oc.provider), path, err, oc.loginCommand(), providerDisplayName(oc.provider))
+		}
+		if creds.ClaudeAiOauth.AccessToken == "" {
+			return fmt.Errorf("missing OAuth access token in %s\nRun '%s' to authenticate %s first",
+				path, oc.loginCommand(), providerDisplayName(oc.provider))
+		}
+		oc.accessToken = creds.ClaudeAiOauth.AccessToken
+		oc.refreshToken = creds.ClaudeAiOauth.RefreshToken
+		oc.accountID = ""
+		oc.expiresAt = creds.ClaudeAiOauth.ExpiresAt
+		oc.subscriptionType = creds.ClaudeAiOauth.SubscriptionType
+		oc.rateLimitTier = creds.ClaudeAiOauth.RateLimitTier
 	}
 
-	if creds.ClaudeAiOauth.AccessToken == "" {
-		return fmt.Errorf("missing OAuth access token in %s\nRun 'claude login' to authenticate Claude Code first", credentialsPath)
-	}
-
-	oc.accessToken = creds.ClaudeAiOauth.AccessToken
-	oc.refreshToken = creds.ClaudeAiOauth.RefreshToken
-	oc.expiresAt = creds.ClaudeAiOauth.ExpiresAt
-	oc.subscriptionType = creds.ClaudeAiOauth.SubscriptionType
-	oc.rateLimitTier = creds.ClaudeAiOauth.RateLimitTier
 	return nil
 }
 
@@ -90,28 +135,43 @@ func (oc *OAuthCredentials) isExpired() bool {
 }
 
 // GetAccessToken returns a valid access token. On expiry, re-reads the
-// credentials file in case Claude Code refreshed the token externally.
+// credentials file in case the CLI refreshed the token externally.
 func (oc *OAuthCredentials) GetAccessToken() (string, error) {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
 	if oc.isExpired() {
-		log.Println("OAuth token expired, reloading credentials from disk...")
+		log.Printf("%s OAuth token expired, reloading credentials from disk...", providerDisplayName(oc.provider))
 		if err := oc.load(); err != nil {
 			return "", fmt.Errorf("%w (reload failed: %v)", ErrTokenExpired, err)
 		}
 		if oc.isExpired() {
 			return "", ErrTokenExpired
 		}
-		log.Println("Reloaded valid token from disk")
+		log.Printf("Reloaded valid %s token from disk", providerDisplayName(oc.provider))
 	}
 	return oc.accessToken, nil
+}
+
+// Provider returns the credential provider.
+func (oc *OAuthCredentials) Provider() Provider {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	return oc.provider
+}
+
+// AccountID returns the provider account identifier when available.
+func (oc *OAuthCredentials) AccountID() string {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	return oc.accountID
 }
 
 // CredentialSnapshot holds a consistent point-in-time view of credentials.
 type CredentialSnapshot struct {
 	Changed          bool
 	AccessToken      string
+	AccountID        string
 	RefreshTokenHash string
 	SubscriptionType string
 	RateLimitTier    string
@@ -140,6 +200,7 @@ func (oc *OAuthCredentials) ReloadAndSnapshot() (CredentialSnapshot, error) {
 	return CredentialSnapshot{
 		Changed:          oc.refreshToken != prev,
 		AccessToken:      oc.accessToken,
+		AccountID:        oc.accountID,
 		RefreshTokenHash: hash,
 		SubscriptionType: oc.subscriptionType,
 		RateLimitTier:    oc.rateLimitTier,
@@ -170,4 +231,27 @@ func (oc *OAuthCredentials) RateLimitTier() string {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 	return oc.rateLimitTier
+}
+
+func jwtExpiryMillis(token string) int64 {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return 0
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return 0
+	}
+
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return 0
+	}
+	if claims.Exp == 0 {
+		return 0
+	}
+	return claims.Exp * 1000
 }

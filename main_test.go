@@ -444,3 +444,28 @@ func TestConfigShowText_False(t *testing.T) {
 		t.Errorf("configShowText(false) = %v, want false", configShowText(cfg))
 	}
 }
+
+func TestApplyOverrides_ProviderFlag(t *testing.T) {
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{Provider: "codex", HaloSize: -1})
+	if cfg.Provider != "codex" {
+		t.Errorf("Provider = %q, want codex", cfg.Provider)
+	}
+}
+
+func TestApplyOverrides_InvalidProviderIgnored(t *testing.T) {
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{Provider: "invalid", HaloSize: -1})
+	if cfg.Provider != "" {
+		t.Errorf("Provider = %q, want empty autodetect", cfg.Provider)
+	}
+}
+
+func TestApplyOverrides_ProviderEnvVar(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_PROVIDER", "claude")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, noOverrides)
+	if cfg.Provider != "claude" {
+		t.Errorf("Provider = %q, want claude", cfg.Provider)
+	}
+}

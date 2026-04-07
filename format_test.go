@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -148,5 +149,36 @@ func TestFormatProjectionLine_Value(t *testing.T) {
 	got := formatProjectionLine(&proj)
 	if got != "  - projected ~36% at reset" {
 		t.Errorf("formatProjectionLine(35.7) = %q, want %q", got, "  - projected ~36% at reset")
+	}
+}
+
+func TestFormatDryRunSummary(t *testing.T) {
+	v5 := 12.0
+	v7 := 34.0
+	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+	reset := now.Add(2 * time.Hour)
+	state := QuotaState{
+		Provider:       ProviderCodex,
+		FiveHour:       &v5,
+		FiveHourResets: &reset,
+		SevenDay:       &v7,
+		LastUpdate:     &now,
+	}
+
+	got := formatDryRunSummary(ProviderCodex, "/tmp/auth.json", state)
+	if !strings.Contains(got, "Provider: codex") {
+		t.Fatalf("missing provider line: %q", got)
+	}
+	if !strings.Contains(got, "Credentials: /tmp/auth.json") {
+		t.Fatalf("missing credentials line: %q", got)
+	}
+	if !strings.Contains(got, "5h: 12%") {
+		t.Fatalf("missing 5h line: %q", got)
+	}
+	if !strings.Contains(got, "7d: 34%") {
+		t.Fatalf("missing 7d line: %q", got)
+	}
+	if !strings.Contains(got, "Updated: "+now.Local().Format(time.RFC3339)) {
+		t.Fatalf("missing updated line: %q", got)
 	}
 }

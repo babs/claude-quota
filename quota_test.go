@@ -131,6 +131,7 @@ func TestParseBucket_InvalidTime(t *testing.T) {
 
 func newTestQuotaClient(token string, expiresAt int64, client *http.Client) *QuotaClient {
 	creds := &OAuthCredentials{
+		provider:    ProviderClaude,
 		accessToken: token,
 		expiresAt:   expiresAt,
 	}
@@ -365,9 +366,9 @@ func TestFetch_InvalidJSON(t *testing.T) {
 }
 
 func TestFetch_TokenExpired(t *testing.T) {
-	origCreds := credentialsPath
-	defer func() { credentialsPath = origCreds }()
-	credentialsPath = "/nonexistent/credentials.json"
+	origCreds := claudeCredentialsPath
+	defer func() { claudeCredentialsPath = origCreds }()
+	claudeCredentialsPath = "/nonexistent/credentials.json"
 
 	qc := newTestQuotaClient("tok", time.Now().UnixMilli()-1000, &http.Client{})
 	if qc.Fetch() {
@@ -382,6 +383,72 @@ func TestFetch_TokenExpired(t *testing.T) {
 	}
 	if !errors.Is(ErrTokenExpired, ErrTokenExpired) {
 		t.Error("sanity check failed")
+	}
+}
+
+func TestFetch_CodexSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer codex-token" {
+			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("ChatGPT-Account-Id") != "acct_123" {
+			t.Errorf("ChatGPT-Account-Id = %q", r.Header.Get("ChatGPT-Account-Id"))
+		}
+		w.WriteHeader(200)
+		w.Write([]byte(`{
+			"account_id": "acct_123",
+			"email": "user@example.com",
+			"plan_type": "team",
+			"rate_limit": {
+				"allowed": true,
+				"limit_reached": false,
+				"primary_window": {
+					"used_percent": 5,
+					"limit_window_seconds": 18000,
+					"reset_after_seconds": 17455,
+					"reset_at": 4102444800
+				},
+				"secondary_window": {
+					"used_percent": 14,
+					"limit_window_seconds": 604800,
+					"reset_after_seconds": 236952,
+					"reset_at": 4103049600
+				}
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	origURL := codexUsageURL
+	defer func() { codexUsageURL = origURL }()
+	codexUsageURL = srv.URL
+
+	creds := &OAuthCredentials{
+		provider:    ProviderCodex,
+		accessToken: "codex-token",
+		accountID:   "acct_123",
+		expiresAt:   time.Now().UnixMilli() + 300_000,
+	}
+	qc := NewQuotaClient(creds, srv.Client())
+	if !qc.Fetch() {
+		t.Fatal("Fetch() returned false")
+	}
+
+	state := qc.State()
+	if state.Provider != ProviderCodex {
+		t.Fatalf("Provider = %q, want %q", state.Provider, ProviderCodex)
+	}
+	if state.FiveHour == nil || *state.FiveHour != 5 {
+		t.Fatalf("FiveHour = %v, want 5", state.FiveHour)
+	}
+	if state.SevenDay == nil || *state.SevenDay != 14 {
+		t.Fatalf("SevenDay = %v, want 14", state.SevenDay)
+	}
+	if state.FiveHourResets == nil || state.FiveHourResets.Unix() != 4102444800 {
+		t.Fatalf("FiveHourResets = %v, want unix 4102444800", state.FiveHourResets)
+	}
+	if state.SevenDayResets == nil || state.SevenDayResets.Unix() != 4103049600 {
+		t.Fatalf("SevenDayResets = %v, want unix 4103049600", state.SevenDayResets)
 	}
 }
 

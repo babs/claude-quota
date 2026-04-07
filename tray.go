@@ -86,7 +86,7 @@ func (a *App) Shutdown() {
 // onReady is called by systray when the tray is ready.
 func (a *App) onReady() {
 	systray.SetTitle("")
-	systray.SetTooltip("Claude Quota")
+	systray.SetTooltip(providerQuotaTitle(a.creds.Provider()))
 
 	// Create menu items.
 	if a.config.ShowAccount {
@@ -113,7 +113,7 @@ func (a *App) onReady() {
 	a.mSevenDaySaturation = systray.AddMenuItem("", "Projected 7d saturation time")
 	a.mSevenDaySaturation.Disable()
 	a.mSevenDaySaturation.Hide()
-	a.mSevenDaySonnet = systray.AddMenuItem("Sonnet 7d: --", "7-day Sonnet quota")
+	a.mSevenDaySonnet = systray.AddMenuItem(extraQuotaLabel(QuotaState{Provider: a.creds.Provider()})+": --", "Additional quota bucket")
 	a.mSevenDaySonnet.Disable()
 
 	systray.AddSeparator()
@@ -261,7 +261,7 @@ func (a *App) recordError() {
 	if state.Error == "" {
 		return
 	}
-	a.stats.RecordError(a.account.AccountUUID, state.ErrorType, state.HTTPStatus, state.Error)
+	a.stats.RecordError(state.Provider, a.account.AccountUUID, state.ErrorType, state.HTTPStatus, state.Error)
 }
 
 // updateUI refreshes the icon and menu items from current state.
@@ -294,7 +294,7 @@ func (a *App) updateUI() {
 	}
 
 	// Update tooltip.
-	systray.SetTooltip(buildTooltip(state))
+	systray.SetTooltip(buildTooltip(state, a.creds.Provider()))
 
 	// Update menu items.
 	if a.mAccountEmail != nil {
@@ -349,7 +349,7 @@ func (a *App) updateUI() {
 		a.mSevenDayProjection.Hide()
 		a.mSevenDaySaturation.Hide()
 	}
-	a.mSevenDaySonnet.SetTitle(formatQuotaLine("Sonnet 7d", state.SevenDaySonnet, state.SevenDaySonnetResets))
+	a.mSevenDaySonnet.SetTitle(formatQuotaLine(extraQuotaLabel(state), state.SevenDaySonnet, state.SevenDaySonnetResets))
 
 	a.mUpdated.SetTitle(formatUpdatedAgo(state.LastUpdate))
 }
@@ -431,8 +431,8 @@ func (a *App) doApplyUpdate(version string) {
 }
 
 // buildTooltip generates tooltip text from state.
-func buildTooltip(state QuotaState) string {
-	lines := "Claude Quota"
+func buildTooltip(state QuotaState, provider Provider) string {
+	lines := providerQuotaTitle(provider)
 
 	if state.Error != "" {
 		lines += "\nError: " + state.Error
@@ -456,7 +456,7 @@ func buildTooltip(state QuotaState) string {
 			}
 		}
 		if state.SevenDaySonnet != nil {
-			lines += "\n" + formatQuotaLine("Sonnet 7d", state.SevenDaySonnet, state.SevenDaySonnetResets)
+			lines += "\n" + formatQuotaLine(extraQuotaLabel(state), state.SevenDaySonnet, state.SevenDaySonnetResets)
 		}
 	}
 
@@ -466,4 +466,14 @@ func buildTooltip(state QuotaState) string {
 	}
 
 	return lines
+}
+
+func extraQuotaLabel(state QuotaState) string {
+	if state.SevenDaySonnetLabel != "" {
+		return state.SevenDaySonnetLabel
+	}
+	if state.Provider == ProviderCodex {
+		return "Additional"
+	}
+	return "Sonnet 7d"
 }

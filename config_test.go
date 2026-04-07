@@ -23,9 +23,26 @@ func TestLoadConfig_Default(t *testing.T) {
 	if cfg.Thresholds.Warning != 60 {
 		t.Errorf("Warning = %f, want 60", cfg.Thresholds.Warning)
 	}
+	if cfg.Provider != "" {
+		t.Errorf("Provider = %q, want empty autodetect default", cfg.Provider)
+	}
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		t.Error("loadConfig should create default config file")
+	}
+}
+
+func TestLoadConfig_EmptyProviderStaysAutodetect(t *testing.T) {
+	orig := configPath
+	defer func() { configPath = orig }()
+
+	dir := t.TempDir()
+	configPath = filepath.Join(dir, "config.json")
+	os.WriteFile(configPath, []byte(`{"provider":"","poll_interval_seconds":60}`), 0600)
+
+	cfg := loadConfig()
+	if cfg.Provider != "" {
+		t.Errorf("Provider = %q, want empty autodetect", cfg.Provider)
 	}
 }
 

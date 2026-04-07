@@ -1,14 +1,13 @@
 # claude-quota
 
-> **Warning:** This tool uses Claude Code's OAuth client ID to access your
-> quota data via an undocumented API. This is not sanctioned by Anthropic
-> and may violate the Terms of Service. Use at your own risk.
+> **Warning:** Claude quota support relies on an undocumented Anthropic endpoint.
+> Codex quota support uses the public ChatGPT/Codex usage API.
 
-Systray widget that displays Claude API quota utilization.
+Systray widget that displays Claude Code or Codex quota utilization.
 
-Reads OAuth credentials from Claude Code CLI (`~/.claude/.credentials.json`),
-polls the Anthropic usage API, and renders a color-coded icon
-with live quota percentages. Multiple indicator styles available.
+Reads OAuth credentials from Claude Code (`~/.claude/.credentials.json`) or
+Codex (`~/.codex/auth.json`), polls the provider quota API, and renders a
+color-coded icon with live quota percentages. Multiple indicator styles available.
 
 |         Systray icon          |              Hover tooltip              |             Context menu              |
 | :---------------------------: | :-------------------------------------: | :-----------------------------------: |
@@ -16,7 +15,8 @@ with live quota percentages. Multiple indicator styles available.
 
 ## Features
 
-- 5-hour, 7-day, and Sonnet 7-day quota tracking
+- Claude: 5-hour, 7-day, and Sonnet 7-day quota tracking
+- Codex: primary and secondary usage windows from `backend-api/wham/usage`
 - Color-coded icon: green (<60%), yellow (60-85%), red (>85%)
 - Multiple indicator styles: pie chart, bar, arc, bar with projection
 - Burn-rate projection: estimates 5h utilization at window reset
@@ -28,7 +28,7 @@ with live quota percentages. Multiple indicator styles available.
 
 ## Prerequisites
 
-- Authenticate Claude Code first: `claude login`
+- Authenticate your provider first: `claude login` or `codex login`
 - `curl` and `xz` must be available (the install script checks for both)
 
 ## Install from release
@@ -93,6 +93,7 @@ For a release build with version info and cross-compilation:
 ./claude-quota                  # start the systray widget
 ./claude-quota -version         # show version info
 ./claude-quota -update          # self-update to latest release
+./claude-quota -provider codex  # use Codex quotas from ~/.codex/auth.json
 ./claude-quota -poll-interval 60
 ./claude-quota -font-size 24
 ./claude-quota -font-name bitmap  # pixel-crisp bitmap font
@@ -130,7 +131,9 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
 
 | Setting                 | Config key              | Env var                           | CLI flag              | Default  |
 | ----------------------- | ----------------------- | --------------------------------- | --------------------- | -------- |
+| Provider                | `provider`              | `CLAUDE_QUOTA_PROVIDER`           | `-provider`           | auto-detect by newest credentials file |
 | Claude home dir         | `claude_home`           | `CLAUDE_QUOTA_CLAUDE_HOME`        | `-claude-home`        | `~`      |
+| Codex home dir          | `codex_home`            | `CLAUDE_QUOTA_CODEX_HOME`         | `-codex-home`         | `~`      |
 | Poll interval (seconds) | `poll_interval_seconds` | `CLAUDE_QUOTA_POLL_INTERVAL`      | `-poll-interval`      | `300`    |
 | Font size               | `font_size`             | `CLAUDE_QUOTA_FONT_SIZE`          | `-font-size`          | `34`     |
 | Font name               | `font_name`             | `CLAUDE_QUOTA_FONT_NAME`          | `-font-name`          | `"bold"` |
@@ -171,6 +174,10 @@ is shown (e.g. `  - saturates in 1h 15m, Mon 13:15`).
 
 Priority: CLI flag > environment variable > config file.
 
+When `provider` is unset, the app auto-detects from available credentials:
+if both `~/.claude/.credentials.json` and `~/.codex/auth.json` exist, it picks
+the most recently modified file.
+
 ## Windows + WSL
 
 If Claude Code is installed inside WSL, the credentials live in the WSL
@@ -189,6 +196,12 @@ claude-quota.exe
 
 Replace `<distro>` with your WSL distribution name and `<username>` with your WSL username.
 To list available WSL distributions, run `wsl -l -q` in PowerShell or cmd.
+
+Codex credentials can be redirected the same way:
+
+```powershell
+claude-quota.exe -provider codex -codex-home \\wsl$\<distro>\home\<username>
+```
 
 ## Autostart (Linux)
 
@@ -215,11 +228,12 @@ ln -sf ~/.local/share/applications/claude-quota.desktop ~/.config/autostart/
 
 ## How it works
 
-The widget uses Claude Code's OAuth credentials to call
-`api.anthropic.com/api/oauth/usage`. When the token expires, it is
-reloaded from disk in case Claude Code has refreshed it externally.
-If the token is still expired, an amber warning icon is shown — run
-`claude login` to re-authenticate.
+For Claude, the widget calls `api.anthropic.com/api/oauth/usage`.
+For Codex, it calls the public `chatgpt.com/backend-api/wham/usage` endpoint.
+When the token expires, it is reloaded from disk in case the CLI has
+refreshed it externally. If the token is still expired, an amber warning
+icon is shown and the tooltip tells you to run `claude login` or
+`codex login`.
 
 ## License
 

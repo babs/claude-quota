@@ -16,12 +16,12 @@ func (oc *OAuthCredentials) load() error {
 
 // credentialsPreCheck verifies the credentials file exists before loading.
 // On Windows it additionally prints WSL guidance.
-func credentialsPreCheck() {
-	if _, err := os.Stat(credentialsPath); os.IsNotExist(err) {
-		fmt.Println("Claude Code credentials not found.")
-		fmt.Printf("Expected: %s\n", credentialsPath)
-		fmt.Println("\nRun 'claude login' to authenticate Claude Code first.")
-		if runtime.GOOS == "windows" {
+func credentialsPreCheck(provider Provider, path string) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		fmt.Printf("%s credentials not found.\n", providerDisplayName(provider))
+		fmt.Printf("Expected: %s\n", path)
+		fmt.Printf("\nRun '%s' to authenticate %s first.\n", loginCommand(provider), providerDisplayName(provider))
+		if runtime.GOOS == "windows" && provider == ProviderClaude {
 			fmt.Println("\nIf Claude Code is installed in WSL, use -claude-home to point to")
 			fmt.Println(`the WSL home directory, e.g.:`)
 			fmt.Println(`  claude-quota -claude-home \\wsl$\<distro>\home\<username>`)

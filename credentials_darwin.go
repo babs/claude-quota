@@ -22,6 +22,9 @@ var loadKeychainFn = loadFromKeychain
 // load tries to read credentials from the macOS Keychain first.
 // If the Keychain lookup fails for any reason, it falls back to the JSON file.
 func (oc *OAuthCredentials) load() error {
+	if oc.provider == ProviderCodex {
+		return oc.loadFromFile()
+	}
 	creds, err := loadKeychainFn()
 	if err != nil {
 		log.Printf("Keychain lookup failed (%v), falling back to credentials file", err)
@@ -41,7 +44,7 @@ func (oc *OAuthCredentials) load() error {
 
 // credentialsPreCheck is a no-op on macOS: credentials may live in the
 // Keychain without a file on disk, so NewOAuthCredentials() handles both.
-func credentialsPreCheck() {}
+func credentialsPreCheck(_ Provider, _ string) {}
 
 // loadFromKeychain retrieves OAuth credentials stored by Claude Code in the macOS Keychain.
 // The account is the current OS username; the password is a JSON blob with the full

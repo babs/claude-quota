@@ -10,7 +10,9 @@ import (
 
 // Config holds the widget configuration.
 type Config struct {
+	Provider            string     `json:"provider,omitempty"`
 	ClaudeHome          string     `json:"claude_home,omitempty"`
+	CodexHome           string     `json:"codex_home,omitempty"`
 	PollIntervalSeconds int        `json:"poll_interval_seconds"`
 	FontSize            float64    `json:"font_size"`
 	FontName            string     `json:"font_name"`
@@ -66,17 +68,24 @@ func configShowText(cfg Config) bool {
 }
 
 // loadConfig loads config from disk, creating a default if it doesn't exist.
-// Missing fields keep their defaults via json.Unmarshal into a pre-populated struct.
 func loadConfig() Config {
+	return loadConfigWithMode(true)
+}
+
+// loadConfigWithMode loads config from disk. When createDefault is false, a missing
+// config file returns defaults without writing anything to disk.
+func loadConfigWithMode(createDefault bool) Config {
 	cfg := defaultConfig()
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			if writeErr := saveConfig(cfg); writeErr != nil {
-				log.Printf("Failed to write default config: %v", writeErr)
-			} else {
-				log.Printf("Created default config at %s", configPath)
+			if createDefault {
+				if writeErr := saveConfig(cfg); writeErr != nil {
+					log.Printf("Failed to write default config: %v", writeErr)
+				} else {
+					log.Printf("Created default config at %s", configPath)
+				}
 			}
 			return cfg
 		}
@@ -120,6 +129,14 @@ func loadConfig() Config {
 	}
 	if cfg.ShowText == nil {
 		cfg.ShowText = defaults.ShowText
+	}
+	if cfg.Provider != "" {
+		if !ValidProviderName(cfg.Provider) {
+			log.Printf("Unknown provider %q in config, using autodetect", cfg.Provider)
+			cfg.Provider = defaults.Provider
+		} else {
+			cfg.Provider = string(normalizeProvider(cfg.Provider))
+		}
 	}
 	if cfg.Thresholds.Warning <= 0 || cfg.Thresholds.Warning > 100 {
 		log.Printf("Invalid thresholds.warning %v in config, using default %v", cfg.Thresholds.Warning, defaults.Thresholds.Warning)

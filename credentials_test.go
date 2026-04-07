@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,30 @@ import (
 	"testing"
 	"time"
 )
+
+func writeTestCodexAuth(t *testing.T, accessToken, refreshToken, accountID string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "auth.json")
+	auth := map[string]any{
+		"auth_mode": "chatgpt",
+		"tokens": map[string]any{
+			"id_token":      "id-token",
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
+			"account_id":    accountID,
+		},
+		"last_refresh": time.Now().UTC().Format(time.RFC3339),
+	}
+	data, err := json.Marshal(auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 func TestIsExpired_ZeroExpiresAt(t *testing.T) {
 	oc := &OAuthCredentials{expiresAt: 0}
@@ -71,12 +96,12 @@ func writeTestCredentialsFull(t *testing.T, token, refreshToken string, expiresA
 }
 
 func TestLoad_Valid(t *testing.T) {
-	orig := credentialsPath
-	defer func() { credentialsPath = orig }()
+	orig := claudeCredentialsPath
+	defer func() { claudeCredentialsPath = orig }()
 
-	credentialsPath = writeTestCredentials(t, "test-token", time.Now().UnixMilli()+300_000)
+	claudeCredentialsPath = writeTestCredentials(t, "test-token", time.Now().UnixMilli()+300_000)
 
-	oc := &OAuthCredentials{}
+	oc := &OAuthCredentials{provider: ProviderClaude}
 	if err := oc.load(); err != nil {
 		t.Fatalf("load() error: %v", err)
 	}
@@ -86,50 +111,50 @@ func TestLoad_Valid(t *testing.T) {
 }
 
 func TestLoad_MissingFile(t *testing.T) {
-	orig := credentialsPath
-	defer func() { credentialsPath = orig }()
+	orig := claudeCredentialsPath
+	defer func() { claudeCredentialsPath = orig }()
 
-	credentialsPath = "/nonexistent/path/credentials.json"
+	claudeCredentialsPath = "/nonexistent/path/credentials.json"
 
-	oc := &OAuthCredentials{}
+	oc := &OAuthCredentials{provider: ProviderClaude}
 	if err := oc.load(); err == nil {
 		t.Error("load() should fail for missing file")
 	}
 }
 
 func TestLoad_InvalidJSON(t *testing.T) {
-	orig := credentialsPath
-	defer func() { credentialsPath = orig }()
+	orig := claudeCredentialsPath
+	defer func() { claudeCredentialsPath = orig }()
 
 	dir := t.TempDir()
-	credentialsPath = filepath.Join(dir, "credentials.json")
-	os.WriteFile(credentialsPath, []byte("{invalid"), 0600)
+	claudeCredentialsPath = filepath.Join(dir, "credentials.json")
+	os.WriteFile(claudeCredentialsPath, []byte("{invalid"), 0600)
 
-	oc := &OAuthCredentials{}
+	oc := &OAuthCredentials{provider: ProviderClaude}
 	if err := oc.load(); err == nil {
 		t.Error("load() should fail for invalid JSON")
 	}
 }
 
 func TestLoad_EmptyToken(t *testing.T) {
-	orig := credentialsPath
-	defer func() { credentialsPath = orig }()
+	orig := claudeCredentialsPath
+	defer func() { claudeCredentialsPath = orig }()
 
-	credentialsPath = writeTestCredentials(t, "", 0)
+	claudeCredentialsPath = writeTestCredentials(t, "", 0)
 
-	oc := &OAuthCredentials{}
+	oc := &OAuthCredentials{provider: ProviderClaude}
 	if err := oc.load(); err == nil {
 		t.Error("load() should fail when accessToken is empty")
 	}
 }
 
 func TestNewOAuthCredentials_Valid(t *testing.T) {
-	orig := credentialsPath
-	defer func() { credentialsPath = orig }()
+	orig := claudeCredentialsPath
+	defer func() { claudeCredentialsPath = orig }()
 
-	credentialsPath = writeTestCredentials(t, "tok", time.Now().UnixMilli()+300_000)
+	claudeCredentialsPath = writeTestCredentials(t, "tok", time.Now().UnixMilli()+300_000)
 
-	oc, err := NewOAuthCredentials()
+	oc, err := NewOAuthCredentials(ProviderClaude)
 	if err != nil {
 		t.Fatalf("NewOAuthCredentials() error: %v", err)
 	}
@@ -139,12 +164,12 @@ func TestNewOAuthCredentials_Valid(t *testing.T) {
 }
 
 func TestNewOAuthCredentials_MissingFile(t *testing.T) {
-	orig := credentialsPath
-	defer func() { credentialsPath = orig }()
+	orig := claudeCredentialsPath
+	defer func() { claudeCredentialsPath = orig }()
 
-	credentialsPath = "/nonexistent/credentials.json"
+	claudeCredentialsPath = "/nonexistent/credentials.json"
 
-	_, err := NewOAuthCredentials()
+	_, err := NewOAuthCredentials(ProviderClaude)
 	if err == nil {
 		t.Error("NewOAuthCredentials() should fail for missing file")
 	}
@@ -165,13 +190,14 @@ func TestGetAccessToken_Valid(t *testing.T) {
 }
 
 func TestGetAccessToken_ExpiredReloadSuccess(t *testing.T) {
-	orig := credentialsPath
-	defer func() { credentialsPath = orig }()
+	orig := claudeCredentialsPath
+	defer func() { claudeCredentialsPath = orig }()
 
 	futureMs := time.Now().UnixMilli() + 300_000
-	credentialsPath = writeTestCredentials(t, "refreshed-token", futureMs)
+	claudeCredentialsPath = writeTestCredentials(t, "refreshed-token", futureMs)
 
 	oc := &OAuthCredentials{
+		provider:    ProviderClaude,
 		accessToken: "old-token",
 		expiresAt:   time.Now().UnixMilli() - 1000,
 	}
@@ -185,13 +211,14 @@ func TestGetAccessToken_ExpiredReloadSuccess(t *testing.T) {
 }
 
 func TestGetAccessToken_ExpiredReloadStillExpired(t *testing.T) {
-	orig := credentialsPath
-	defer func() { credentialsPath = orig }()
+	orig := claudeCredentialsPath
+	defer func() { claudeCredentialsPath = orig }()
 
 	pastMs := time.Now().UnixMilli() - 1000
-	credentialsPath = writeTestCredentials(t, "still-expired", pastMs)
+	claudeCredentialsPath = writeTestCredentials(t, "still-expired", pastMs)
 
 	oc := &OAuthCredentials{
+		provider:    ProviderClaude,
 		accessToken: "old-token",
 		expiresAt:   time.Now().UnixMilli() - 2000,
 	}
@@ -202,12 +229,13 @@ func TestGetAccessToken_ExpiredReloadStillExpired(t *testing.T) {
 }
 
 func TestGetAccessToken_ExpiredReloadFails(t *testing.T) {
-	orig := credentialsPath
-	defer func() { credentialsPath = orig }()
+	orig := claudeCredentialsPath
+	defer func() { claudeCredentialsPath = orig }()
 
-	credentialsPath = "/nonexistent/credentials.json"
+	claudeCredentialsPath = "/nonexistent/credentials.json"
 
 	oc := &OAuthCredentials{
+		provider:    ProviderClaude,
 		accessToken: "old-token",
 		expiresAt:   time.Now().UnixMilli() - 1000,
 	}
@@ -218,8 +246,8 @@ func TestGetAccessToken_ExpiredReloadFails(t *testing.T) {
 }
 
 func TestCredentialsPath_CustomPath(t *testing.T) {
-	orig := credentialsPath
-	defer func() { credentialsPath = orig }()
+	orig := claudeCredentialsPath
+	defer func() { claudeCredentialsPath = orig }()
 
 	dir := t.TempDir()
 	claudeDir := filepath.Join(dir, ".claude")
@@ -238,9 +266,9 @@ func TestCredentialsPath_CustomPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	credentialsPath = filepath.Join(dir, ".claude", ".credentials.json")
+	claudeCredentialsPath = filepath.Join(dir, ".claude", ".credentials.json")
 
-	oc, err := NewOAuthCredentials()
+	oc, err := NewOAuthCredentials(ProviderClaude)
 	if err != nil {
 		t.Fatalf("NewOAuthCredentials() error: %v", err)
 	}
@@ -250,25 +278,25 @@ func TestCredentialsPath_CustomPath(t *testing.T) {
 }
 
 func TestReloadAndSnapshot_Changed(t *testing.T) {
-	orig := credentialsPath
-	defer func() { credentialsPath = orig }()
+	orig := claudeCredentialsPath
+	defer func() { claudeCredentialsPath = orig }()
 
-	credentialsPath = writeTestCredentialsFull(t, "tok1", "refresh-1", time.Now().UnixMilli()+300_000, "", "")
+	claudeCredentialsPath = writeTestCredentialsFull(t, "tok1", "refresh-1", time.Now().UnixMilli()+300_000, "", "")
 
-	oc, err := NewOAuthCredentials()
+	oc, err := NewOAuthCredentials(ProviderClaude)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Overwrite with different refresh token.
-	dir := filepath.Dir(credentialsPath)
+	dir := filepath.Dir(claudeCredentialsPath)
 	inner := map[string]any{
 		"accessToken":  "tok2",
 		"refreshToken": "refresh-2",
 		"expiresAt":    time.Now().UnixMilli() + 300_000,
 	}
 	data, _ := json.Marshal(map[string]any{"claudeAiOauth": inner})
-	os.WriteFile(filepath.Join(dir, filepath.Base(credentialsPath)), data, 0600)
+	os.WriteFile(filepath.Join(dir, filepath.Base(claudeCredentialsPath)), data, 0600)
 
 	snap, err := oc.ReloadAndSnapshot()
 	if err != nil {
@@ -286,12 +314,12 @@ func TestReloadAndSnapshot_Changed(t *testing.T) {
 }
 
 func TestReloadAndSnapshot_Unchanged(t *testing.T) {
-	orig := credentialsPath
-	defer func() { credentialsPath = orig }()
+	orig := claudeCredentialsPath
+	defer func() { claudeCredentialsPath = orig }()
 
-	credentialsPath = writeTestCredentialsFull(t, "tok1", "refresh-1", time.Now().UnixMilli()+300_000, "pro", "tier4")
+	claudeCredentialsPath = writeTestCredentialsFull(t, "tok1", "refresh-1", time.Now().UnixMilli()+300_000, "pro", "tier4")
 
-	oc, err := NewOAuthCredentials()
+	oc, err := NewOAuthCredentials(ProviderClaude)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,12 +357,12 @@ func TestRefreshTokenHash_Empty(t *testing.T) {
 }
 
 func TestLoad_ParsesSubscriptionType(t *testing.T) {
-	orig := credentialsPath
-	defer func() { credentialsPath = orig }()
+	orig := claudeCredentialsPath
+	defer func() { claudeCredentialsPath = orig }()
 
-	credentialsPath = writeTestCredentialsFull(t, "tok", "refresh", time.Now().UnixMilli()+300_000, "pro", "tier4")
+	claudeCredentialsPath = writeTestCredentialsFull(t, "tok", "refresh", time.Now().UnixMilli()+300_000, "pro", "tier4")
 
-	oc, err := NewOAuthCredentials()
+	oc, err := NewOAuthCredentials(ProviderClaude)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,5 +371,51 @@ func TestLoad_ParsesSubscriptionType(t *testing.T) {
 	}
 	if oc.RateLimitTier() != "tier4" {
 		t.Errorf("RateLimitTier() = %q, want %q", oc.RateLimitTier(), "tier4")
+	}
+}
+
+func TestLoad_CodexAuth(t *testing.T) {
+	orig := codexAuthPath
+	defer func() { codexAuthPath = orig }()
+
+	token := "header." + base64.RawURLEncoding.EncodeToString([]byte(`{"exp":4102444800}`)) + ".sig"
+	codexAuthPath = writeTestCodexAuth(t, token, "refresh-token", "acct_123")
+
+	oc, err := NewOAuthCredentials(ProviderCodex)
+	if err != nil {
+		t.Fatalf("NewOAuthCredentials(ProviderCodex) error: %v", err)
+	}
+	if oc.accessToken != token {
+		t.Fatalf("accessToken = %q, want %q", oc.accessToken, token)
+	}
+	if oc.accountID != "acct_123" {
+		t.Fatalf("accountID = %q, want acct_123", oc.accountID)
+	}
+	if oc.expiresAt == 0 {
+		t.Fatal("expected JWT exp to be parsed for Codex token")
+	}
+}
+
+func TestReloadAndSnapshot_CodexIncludesAccountID(t *testing.T) {
+	orig := codexAuthPath
+	defer func() { codexAuthPath = orig }()
+
+	token := "header." + base64.RawURLEncoding.EncodeToString([]byte(`{"exp":4102444800}`)) + ".sig"
+	codexAuthPath = writeTestCodexAuth(t, token, "refresh-1", "acct_456")
+
+	oc, err := NewOAuthCredentials(ProviderCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := oc.ReloadAndSnapshot()
+	if err != nil {
+		t.Fatalf("ReloadAndSnapshot() error: %v", err)
+	}
+	if snap.AccountID != "acct_456" {
+		t.Fatalf("AccountID = %q, want acct_456", snap.AccountID)
+	}
+	if snap.RefreshTokenHash == "" {
+		t.Fatal("RefreshTokenHash should not be empty for Codex refresh token")
 	}
 }

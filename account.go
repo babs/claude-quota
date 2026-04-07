@@ -34,6 +34,7 @@ type profileResponse struct {
 // AccountResolver resolves account identity via the profile API with DB-backed cache.
 // When stats is nil, uses an in-memory cache keyed by refresh token hash.
 type AccountResolver struct {
+	provider Provider
 	client   *http.Client
 	stats    *StatsStore
 	mu       sync.Mutex // protects lastHash/lastInfo
@@ -42,8 +43,8 @@ type AccountResolver struct {
 }
 
 // NewAccountResolver creates a resolver.
-func NewAccountResolver(client *http.Client, stats *StatsStore) *AccountResolver {
-	return &AccountResolver{client: client, stats: stats}
+func NewAccountResolver(provider Provider, client *http.Client, stats *StatsStore) *AccountResolver {
+	return &AccountResolver{provider: provider, client: client, stats: stats}
 }
 
 // Resolve returns account info for the given credential snapshot.
@@ -53,6 +54,16 @@ func NewAccountResolver(client *http.Client, stats *StatsStore) *AccountResolver
 func (r *AccountResolver) Resolve(snap CredentialSnapshot) AccountInfo {
 	if r == nil {
 		return AccountInfo{}
+	}
+	if r.provider == ProviderCodex {
+		info := AccountInfo{AccountUUID: snap.AccountID}
+		if info.AccountUUID == "" {
+			info.AccountUUID = snap.RefreshTokenHash
+		}
+		if snap.RefreshTokenHash != "" {
+			r.stats.UpsertAccount(r.provider, snap.RefreshTokenHash, info, snap.SubscriptionType, snap.RateLimitTier)
+		}
+		return info
 	}
 	if snap.RefreshTokenHash == "" {
 		return AccountInfo{}
@@ -75,7 +86,7 @@ func (r *AccountResolver) resolveWithDB(snap CredentialSnapshot) AccountInfo {
 		info = AccountInfo{AccountUUID: snap.RefreshTokenHash}
 	}
 
-	r.stats.UpsertAccount(snap.RefreshTokenHash, info, snap.SubscriptionType, snap.RateLimitTier)
+	r.stats.UpsertAccount(r.provider, snap.RefreshTokenHash, info, snap.SubscriptionType, snap.RateLimitTier)
 	return info
 }
 

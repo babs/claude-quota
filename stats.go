@@ -87,6 +87,7 @@ func initSchema(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS fetch_stats (
 			id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider                   TEXT NOT NULL DEFAULT 'claude',
 			fetched_at                 INTEGER NOT NULL, -- unix timestamp UTC
 			account_id                 TEXT,
 			five_hour_util             REAL,
@@ -105,6 +106,7 @@ func initSchema(db *sql.DB) error {
 
 		CREATE TABLE IF NOT EXISTS accounts (
 			refresh_token_hash TEXT PRIMARY KEY,
+			provider           TEXT NOT NULL DEFAULT 'claude',
 			account_uuid       TEXT NOT NULL,
 			email_address      TEXT,
 			organization_uuid  TEXT,
@@ -117,6 +119,7 @@ func initSchema(db *sql.DB) error {
 
 		CREATE TABLE IF NOT EXISTS fetch_errors (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider    TEXT NOT NULL DEFAULT 'claude',
 			occurred_at INTEGER NOT NULL, -- unix timestamp UTC
 			account_id  TEXT,
 			error_type  TEXT NOT NULL,    -- credential, http, network, parse
@@ -126,7 +129,62 @@ func initSchema(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_fetch_errors_occurred_at
 			ON fetch_errors (occurred_at);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	return migrateSchema(db)
+}
+
+func migrateSchema(db *sql.DB) error {
+	migrations := []struct {
+		table  string
+		column string
+		sql    string
+	}{
+		{"fetch_stats", "provider", `ALTER TABLE fetch_stats ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`},
+		{"accounts", "provider", `ALTER TABLE accounts ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`},
+		{"fetch_errors", "provider", `ALTER TABLE fetch_errors ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`},
+	}
+
+	for _, m := range migrations {
+		ok, err := columnExists(db, m.table, m.column)
+		if err != nil {
+			return err
+		}
+		if ok {
+			continue
+		}
+		if _, err := db.Exec(m.sql); err != nil {
+			return fmt.Errorf("migrate %s.%s: %w", m.table, m.column, err)
+		}
+	}
+	return nil
+}
+
+func columnExists(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, fmt.Errorf("schema info for %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			ctype     string
+			notnull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return false, fmt.Errorf("scan schema info for %s: %w", table, err)
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // RecordFetch inserts a row from a successful quota fetch.
@@ -139,11 +197,12 @@ func (s *StatsStore) RecordFetch(state QuotaState, accountID string) {
 
 	_, err := s.db.Exec(`
 		INSERT INTO fetch_stats (
-			fetched_at, account_id,
+			provider, fetched_at, account_id,
 			five_hour_util, five_hour_resets_at, five_hour_projected, five_hour_saturation,
 			seven_day_util, seven_day_resets_at, seven_day_projected, seven_day_saturation,
 			seven_day_sonnet_util, seven_day_sonnet_resets_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		defaultStatsProvider(state.Provider),
 		timeToUnix(state.LastUpdate),
 		accountIDVal,
 		state.FiveHour,
@@ -185,14 +244,14 @@ func (s *StatsStore) LookupAccount(refreshTokenHash string) (AccountInfo, bool) 
 }
 
 // UpsertAccount inserts or replaces an account cache entry.
-func (s *StatsStore) UpsertAccount(refreshTokenHash string, info AccountInfo, subType, rateLimitTier string) {
+func (s *StatsStore) UpsertAccount(provider Provider, refreshTokenHash string, info AccountInfo, subType, rateLimitTier string) {
 	now := time.Now().Unix()
 	_, err := s.db.Exec(`
 		INSERT OR REPLACE INTO accounts
-			(refresh_token_hash, account_uuid, email_address, organization_uuid, organization_name,
+			(refresh_token_hash, provider, account_uuid, email_address, organization_uuid, organization_name,
 			 subscription_type, rate_limit_tier, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM accounts WHERE refresh_token_hash = ?), ?), ?)`,
-		refreshTokenHash, info.AccountUUID, info.EmailAddress, info.OrganizationUUID, info.OrganizationName,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM accounts WHERE refresh_token_hash = ?), ?), ?)`,
+		refreshTokenHash, defaultStatsProvider(provider), info.AccountUUID, info.EmailAddress, info.OrganizationUUID, info.OrganizationName,
 		subType, rateLimitTier, refreshTokenHash, now, now,
 	)
 	if err != nil {
@@ -201,7 +260,7 @@ func (s *StatsStore) UpsertAccount(refreshTokenHash string, info AccountInfo, su
 }
 
 // RecordError inserts a fetch error row. Best-effort: logs on failure.
-func (s *StatsStore) RecordError(accountID, errType string, httpStatus int, message string) {
+func (s *StatsStore) RecordError(provider Provider, accountID, errType string, httpStatus int, message string) {
 	var accountIDVal any
 	if accountID != "" {
 		accountIDVal = accountID
@@ -211,9 +270,9 @@ func (s *StatsStore) RecordError(accountID, errType string, httpStatus int, mess
 		httpStatusVal = httpStatus
 	}
 	_, err := s.db.Exec(`
-		INSERT INTO fetch_errors (occurred_at, account_id, error_type, http_status, message)
-		VALUES (?, ?, ?, ?, ?)`,
-		time.Now().Unix(), accountIDVal, errType, httpStatusVal, message,
+		INSERT INTO fetch_errors (provider, occurred_at, account_id, error_type, http_status, message)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		defaultStatsProvider(provider), time.Now().Unix(), accountIDVal, errType, httpStatusVal, message,
 	)
 	if err != nil {
 		log.Printf("Failed to record fetch error: %v", err)
@@ -232,4 +291,11 @@ func timeToUnix(t *time.Time) any {
 		return nil
 	}
 	return t.Unix()
+}
+
+func defaultStatsProvider(provider Provider) string {
+	if provider == "" {
+		return string(ProviderClaude)
+	}
+	return string(provider)
 }
