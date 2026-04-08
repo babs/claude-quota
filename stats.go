@@ -14,6 +14,8 @@ import (
 
 var statsDBPath string
 
+const currentSchemaVersion = 2
+
 func init() {
 	dir, err := userDataDir()
 	if err != nil {
@@ -84,108 +86,134 @@ func NewStatsStore() (*StatsStore, error) {
 }
 
 func initSchema(db *sql.DB) error {
-	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS fetch_stats (
-			id                         INTEGER PRIMARY KEY AUTOINCREMENT,
-			provider                   TEXT NOT NULL DEFAULT 'claude',
-			fetched_at                 INTEGER NOT NULL, -- unix timestamp UTC
-			account_id                 TEXT,
-			five_hour_util             REAL,
-			five_hour_resets_at        INTEGER, -- unix timestamp UTC
-			five_hour_projected        REAL,
-			five_hour_saturation       INTEGER, -- unix timestamp UTC
-			seven_day_util             REAL,
-			seven_day_resets_at        INTEGER, -- unix timestamp UTC
-			seven_day_projected        REAL,
-			seven_day_saturation       INTEGER, -- unix timestamp UTC
-			seven_day_sonnet_util      REAL,
-			seven_day_sonnet_resets_at INTEGER  -- unix timestamp UTC
-		);
-		CREATE INDEX IF NOT EXISTS idx_fetch_stats_fetched_at
-			ON fetch_stats (fetched_at);
-
-		CREATE TABLE IF NOT EXISTS accounts (
-			refresh_token_hash TEXT PRIMARY KEY,
-			provider           TEXT NOT NULL DEFAULT 'claude',
-			account_uuid       TEXT NOT NULL,
-			email_address      TEXT,
-			organization_uuid  TEXT,
-			organization_name  TEXT,
-			subscription_type  TEXT,
-			rate_limit_tier    TEXT,
-			created_at         INTEGER NOT NULL, -- unix timestamp UTC
-			updated_at         INTEGER NOT NULL  -- unix timestamp UTC
-		);
-
-		CREATE TABLE IF NOT EXISTS fetch_errors (
-			id          INTEGER PRIMARY KEY AUTOINCREMENT,
-			provider    TEXT NOT NULL DEFAULT 'claude',
-			occurred_at INTEGER NOT NULL, -- unix timestamp UTC
-			account_id  TEXT,
-			error_type  TEXT NOT NULL,    -- credential, http, network, parse
-			http_status INTEGER,          -- NULL when not HTTP error
-			message     TEXT
-		);
-		CREATE INDEX IF NOT EXISTS idx_fetch_errors_occurred_at
-			ON fetch_errors (occurred_at);
-	`)
+	version, err := schemaVersion(db)
 	if err != nil {
 		return err
 	}
-	return migrateSchema(db)
-}
-
-func migrateSchema(db *sql.DB) error {
-	migrations := []struct {
-		table  string
-		column string
-		sql    string
-	}{
-		{"fetch_stats", "provider", `ALTER TABLE fetch_stats ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`},
-		{"accounts", "provider", `ALTER TABLE accounts ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`},
-		{"fetch_errors", "provider", `ALTER TABLE fetch_errors ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`},
+	if version > currentSchemaVersion {
+		return fmt.Errorf("unsupported stats schema version %d (max %d)", version, currentSchemaVersion)
 	}
-
-	for _, m := range migrations {
-		ok, err := columnExists(db, m.table, m.column)
-		if err != nil {
-			return err
-		}
-		if ok {
+	for _, m := range schemaMigrations {
+		if m.version <= version {
 			continue
 		}
-		if _, err := db.Exec(m.sql); err != nil {
-			return fmt.Errorf("migrate %s.%s: %w", m.table, m.column, err)
+		if err := applyMigration(db, m); err != nil {
+			return err
 		}
+		version = m.version
 	}
 	return nil
 }
 
-func columnExists(db *sql.DB, table, column string) (bool, error) {
-	// Safety: table names come from hardcoded migration literals, not user input.
-	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
-	if err != nil {
-		return false, fmt.Errorf("schema info for %s: %w", table, err)
-	}
-	defer rows.Close()
+type schemaMigration struct {
+	version int
+	name    string
+	up      func(*sql.Tx) error
+}
 
-	for rows.Next() {
-		var (
-			cid       int
-			name      string
-			ctype     string
-			notnull   int
-			dfltValue sql.NullString
-			pk        int
-		)
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
-			return false, fmt.Errorf("scan schema info for %s: %w", table, err)
-		}
-		if name == column {
-			return true, nil
-		}
+var schemaMigrations = []schemaMigration{
+	{
+		version: 1,
+		name:    "create initial stats schema",
+		up: func(tx *sql.Tx) error {
+			_, err := tx.Exec(`
+				CREATE TABLE IF NOT EXISTS fetch_stats (
+					id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+					fetched_at                 INTEGER NOT NULL, -- unix timestamp UTC
+					account_id                 TEXT,
+					five_hour_util             REAL,
+					five_hour_resets_at        INTEGER, -- unix timestamp UTC
+					five_hour_projected        REAL,
+					five_hour_saturation       INTEGER, -- unix timestamp UTC
+					seven_day_util             REAL,
+					seven_day_resets_at        INTEGER, -- unix timestamp UTC
+					seven_day_projected        REAL,
+					seven_day_saturation       INTEGER, -- unix timestamp UTC
+					seven_day_sonnet_util      REAL,
+					seven_day_sonnet_resets_at INTEGER  -- unix timestamp UTC
+				);
+				CREATE INDEX IF NOT EXISTS idx_fetch_stats_fetched_at
+					ON fetch_stats (fetched_at);
+
+				CREATE TABLE IF NOT EXISTS accounts (
+					refresh_token_hash TEXT PRIMARY KEY,
+					account_uuid       TEXT NOT NULL,
+					email_address      TEXT,
+					organization_uuid  TEXT,
+					organization_name  TEXT,
+					subscription_type  TEXT,
+					rate_limit_tier    TEXT,
+					created_at         INTEGER NOT NULL, -- unix timestamp UTC
+					updated_at         INTEGER NOT NULL  -- unix timestamp UTC
+				);
+
+				CREATE TABLE IF NOT EXISTS fetch_errors (
+					id          INTEGER PRIMARY KEY AUTOINCREMENT,
+					occurred_at INTEGER NOT NULL, -- unix timestamp UTC
+					account_id  TEXT,
+					error_type  TEXT NOT NULL,    -- credential, http, network, parse
+					http_status INTEGER,          -- NULL when not HTTP error
+					message     TEXT
+				);
+				CREATE INDEX IF NOT EXISTS idx_fetch_errors_occurred_at
+					ON fetch_errors (occurred_at);
+			`)
+			if err != nil {
+				return fmt.Errorf("create v1 schema: %w", err)
+			}
+			return nil
+		},
+	},
+	{
+		version: 2,
+		name:    "add provider columns",
+		up: func(tx *sql.Tx) error {
+			for _, stmt := range []string{
+				`ALTER TABLE fetch_stats ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`,
+				`ALTER TABLE accounts ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`,
+				`ALTER TABLE fetch_errors ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`,
+			} {
+				if _, err := tx.Exec(stmt); err != nil {
+					return fmt.Errorf("apply v2 schema: %w", err)
+				}
+			}
+			return nil
+		},
+	},
+}
+
+func schemaVersion(db *sql.DB) (int, error) {
+	var version int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return 0, fmt.Errorf("read schema version: %w", err)
 	}
-	return false, rows.Err()
+	return version, nil
+}
+
+func setSchemaVersion(tx *sql.Tx, version int) error {
+	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
+		return fmt.Errorf("set schema version %d: %w", version, err)
+	}
+	return nil
+}
+
+func applyMigration(db *sql.DB, m schemaMigration) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin migration v%d (%s): %w", m.version, m.name, err)
+	}
+	defer tx.Rollback()
+
+	if err := m.up(tx); err != nil {
+		return fmt.Errorf("migration v%d (%s): %w", m.version, m.name, err)
+	}
+	if err := setSchemaVersion(tx, m.version); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration v%d (%s): %w", m.version, m.name, err)
+	}
+	return nil
 }
 
 // RecordFetch inserts a row from a successful quota fetch.

@@ -26,6 +26,14 @@ func TestNewStatsStore(t *testing.T) {
 	if tableName != "fetch_stats" {
 		t.Errorf("expected table name fetch_stats, got %q", tableName)
 	}
+
+	var version int
+	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("PRAGMA user_version failed: %v", err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion)
+	}
 }
 
 func TestRecordFetch_Full(t *testing.T) {
@@ -414,6 +422,7 @@ func TestSchemaMigration_DefaultsProviderToClaude(t *testing.T) {
 		INSERT INTO fetch_stats (fetched_at, account_id) VALUES (1, 'acct-old');
 		INSERT INTO accounts (refresh_token_hash, account_uuid, created_at, updated_at) VALUES ('hash-old', 'acct-old', 1, 1);
 		INSERT INTO fetch_errors (occurred_at, account_id, error_type) VALUES (1, 'acct-old', 'http');
+		PRAGMA user_version = 1;
 	`)
 	if err != nil {
 		t.Fatalf("seed legacy schema: %v", err)
@@ -437,5 +446,13 @@ func TestSchemaMigration_DefaultsProviderToClaude(t *testing.T) {
 		if provider != "claude" {
 			t.Fatalf("query %q returned provider %q, want claude", query, provider)
 		}
+	}
+
+	var version int
+	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("PRAGMA user_version failed: %v", err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion)
 	}
 }
