@@ -2,7 +2,9 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -454,5 +456,109 @@ func TestSchemaMigration_DefaultsProviderToClaude(t *testing.T) {
 	}
 	if version != currentSchemaVersion {
 		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion)
+	}
+}
+
+func TestSchemaVersion_RoundTrip(t *testing.T) {
+	store := newTestStore(t)
+
+	version, err := schemaVersion(store.db)
+	if err != nil {
+		t.Fatalf("schemaVersion() error: %v", err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("schemaVersion() = %d, want %d", version, currentSchemaVersion)
+	}
+
+	tx, err := store.db.Begin()
+	if err != nil {
+		t.Fatalf("db.Begin() error: %v", err)
+	}
+	defer tx.Rollback()
+
+	if err := setSchemaVersion(tx, 1); err != nil {
+		t.Fatalf("setSchemaVersion() error: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit() error: %v", err)
+	}
+
+	version, err = schemaVersion(store.db)
+	if err != nil {
+		t.Fatalf("schemaVersion() after set error: %v", err)
+	}
+	if version != 1 {
+		t.Fatalf("schemaVersion() after set = %d, want 1", version)
+	}
+}
+
+func TestInitSchema_RejectsFutureVersion(t *testing.T) {
+	origPath := statsDBPath
+	statsDBPath = filepath.Join(t.TempDir(), "stats.db")
+	defer func() { statsDBPath = origPath }()
+
+	db, err := sql.Open("sqlite", statsDBPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", currentSchemaVersion+1)); err != nil {
+		t.Fatalf("seed future version: %v", err)
+	}
+
+	err = initSchema(db)
+	if err == nil {
+		t.Fatal("initSchema() error = nil, want rejection of future schema version")
+	}
+	if !strings.Contains(err.Error(), "unsupported stats schema version") {
+		t.Fatalf("initSchema() error = %v, want future-version rejection", err)
+	}
+}
+
+func TestApplyMigration_RollsBackOnFailure(t *testing.T) {
+	origPath := statsDBPath
+	statsDBPath = filepath.Join(t.TempDir(), "stats.db")
+	defer func() { statsDBPath = origPath }()
+
+	db, err := sql.Open("sqlite", statsDBPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec("CREATE TABLE migration_test (id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatalf("create migration_test: %v", err)
+	}
+
+	err = applyMigration(db, schemaMigration{
+		version: 1,
+		name:    "failing migration",
+		up: func(tx *sql.Tx) error {
+			if _, err := tx.Exec("ALTER TABLE migration_test ADD COLUMN note TEXT"); err != nil {
+				return err
+			}
+			return fmt.Errorf("boom")
+		},
+	})
+	if err == nil {
+		t.Fatal("applyMigration() error = nil, want failure")
+	}
+
+	var count int
+	row := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('migration_test') WHERE name = 'note'")
+	if err := row.Scan(&count); err != nil {
+		t.Fatalf("pragma_table_info scan error: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("migration_test.note column count = %d, want 0 after rollback", count)
+	}
+
+	version, err := schemaVersion(db)
+	if err != nil {
+		t.Fatalf("schemaVersion() error: %v", err)
+	}
+	if version != 0 {
+		t.Fatalf("schemaVersion() = %d, want 0 after failed migration", version)
 	}
 }
