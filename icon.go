@@ -7,6 +7,8 @@ import (
 	"image/color"
 	"image/png"
 	"math"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/fogleman/gg"
@@ -45,6 +47,71 @@ func ValidIndicatorName(name string) bool {
 		return true
 	}
 	return false
+}
+
+func ValidProviderMarkPosition(pos string) bool {
+	switch strings.ToUpper(pos) {
+	case "NW", "NE", "SW", "SE":
+		return true
+	}
+	return false
+}
+
+// ValidHexColor reports whether s parses as a #RGB, #RRGGBB, or #RRGGBBAA
+// hex color.
+func ValidHexColor(s string) bool {
+	_, err := parseHexColor(s)
+	return err == nil
+}
+
+// parseHexColor parses a hex color string in one of three forms, with the
+// leading # optional:
+//
+//	#RGB       — 3-digit shorthand; each digit is duplicated (e.g. #DE7 → #DDEE77)
+//	#RRGGBB    — 6-digit opaque
+//	#RRGGBBAA  — 8-digit with explicit alpha
+//
+// Returns an opaque color.RGBA on success. A=0 (fully transparent) is
+// rejected explicitly: it doesn't make sense for a solid tray mark, and the
+// renderIcon pipeline uses A==0 as a sentinel for "no override set."
+func parseHexColor(s string) (color.RGBA, error) {
+	raw := strings.TrimPrefix(strings.TrimSpace(s), "#")
+	var r, g, b, a uint8
+	a = 0xFF
+	switch len(raw) {
+	case 3:
+		// #RGB — expand each nibble to a byte by duplicating it.
+		n, err := strconv.ParseUint(raw, 16, 16)
+		if err != nil {
+			return color.RGBA{}, fmt.Errorf("invalid hex color %q: %w", s, err)
+		}
+		r = uint8((n>>8)&0xF) * 0x11
+		g = uint8((n>>4)&0xF) * 0x11
+		b = uint8(n&0xF) * 0x11
+	case 6:
+		n, err := strconv.ParseUint(raw, 16, 32)
+		if err != nil {
+			return color.RGBA{}, fmt.Errorf("invalid hex color %q: %w", s, err)
+		}
+		r = uint8(n >> 16)
+		g = uint8(n >> 8)
+		b = uint8(n)
+	case 8:
+		n, err := strconv.ParseUint(raw, 16, 32)
+		if err != nil {
+			return color.RGBA{}, fmt.Errorf("invalid hex color %q: %w", s, err)
+		}
+		r = uint8(n >> 24)
+		g = uint8(n >> 16)
+		b = uint8(n >> 8)
+		a = uint8(n)
+		if a == 0 {
+			return color.RGBA{}, fmt.Errorf("invalid hex color %q: fully transparent (alpha 00) is not supported", s)
+		}
+	default:
+		return color.RGBA{}, fmt.Errorf("invalid hex color %q: expected #RGB, #RRGGBB, or #RRGGBBAA", s)
+	}
+	return color.RGBA{R: r, G: g, B: b, A: a}, nil
 }
 
 // TTF font cache: parsed once per font name, faces cached per size.
@@ -128,22 +195,33 @@ func clampFrac(pct float64) float64 {
 
 // RenderOptions holds rendering configuration for icon generation.
 type RenderOptions struct {
-	FontSize  float64
-	IconSize  int
-	FontName  string
-	HaloSize  float64
-	Indicator string
-	ShowText  bool
+	FontSize             float64
+	IconSize             int
+	FontName             string
+	HaloSize             float64
+	Indicator            string
+	ShowText             bool
+	ProviderMark         bool
+	ProviderMarkSize     float64
+	ProviderMarkPosition string
+	// ProviderMarkColor overrides the provider accent color when its alpha
+	// is non-zero. Affects the provider mark dot and the bar / bar-proj
+	// borders (which use the accent when ProviderMark is enabled). The pie
+	// outer ring deliberately keeps tracking utilization regardless.
+	ProviderMarkColor color.RGBA
 }
 
 // drawParams holds shared, pre-scaled rendering parameters for internal draw functions.
 type drawParams struct {
-	fontSize float64 // FontSize * scale
-	iconSize int
-	s        float64 // scale factor (iconSize / 64)
-	fontName string
-	haloSize float64 // HaloSize * scale
-	showText bool
+	fontSize         float64 // FontSize * scale
+	iconSize         int
+	s                float64 // scale factor (iconSize / 64)
+	fontName         string
+	haloSize         float64 // HaloSize * scale
+	showText         bool
+	providerMark     bool
+	providerMarkSize float64
+	providerMarkPos  string
 }
 
 // renderIcon creates an RGBA icon image of the given size based on the quota state.
@@ -157,22 +235,33 @@ func renderIcon(state QuotaState, thresholds Thresholds, opts RenderOptions) ima
 
 	s := float64(opts.IconSize) / 64.0 // scale factor relative to base size 64
 	p := drawParams{
-		fontSize: opts.FontSize * s,
-		iconSize: opts.IconSize,
-		s:        s,
-		fontName: opts.FontName,
-		haloSize: opts.HaloSize * s,
-		showText: opts.ShowText,
+		fontSize:         opts.FontSize * s,
+		iconSize:         opts.IconSize,
+		s:                s,
+		fontName:         opts.FontName,
+		haloSize:         opts.HaloSize * s,
+		showText:         opts.ShowText,
+		providerMark:     opts.ProviderMark,
+		providerMarkSize: opts.ProviderMarkSize * s,
+		providerMarkPos:  strings.ToUpper(opts.ProviderMarkPosition),
 	}
 
+	accent := providerAccentColor(state.Provider)
+	if opts.ProviderMarkColor.A != 0 {
+		accent = opts.ProviderMarkColor
+	}
 	if state.TokenExpired {
 		drawExpiredIcon(dc, p)
 	} else if state.Error != "" {
 		drawErrorIcon(dc, p)
 	} else {
+		borderCol := col
+		if p.providerMark {
+			borderCol = accent
+		}
 		switch opts.Indicator {
 		case "bar":
-			drawBarIcon(dc, utilization, col, p)
+			drawBarIcon(dc, utilization, col, borderCol, p)
 		case "bar-proj":
 			var projected *float64
 			var projCol color.RGBA
@@ -180,13 +269,19 @@ func renderIcon(state QuotaState, thresholds Thresholds, opts RenderOptions) ima
 				projected = state.FiveHourProjected
 				projCol = mutedColor(colorForUtilization(projected, thresholds))
 			}
-			drawBarProjIcon(dc, utilization, col, projected, projCol, p)
+			drawBarProjIcon(dc, utilization, col, projected, projCol, borderCol, p)
 		case "arc":
 			drawArcIcon(dc, utilization, col, p)
 		default:
 			drawNormalIcon(dc, utilization, col, p)
 		}
+		if p.providerMark {
+			drawProviderAccent(dc, accent, p)
+		}
 		drawUtilizationText(dc, utilization, p)
+	}
+	if p.providerMark && (state.TokenExpired || state.Error != "") {
+		drawProviderAccent(dc, accent, p)
 	}
 
 	return dc.Image()
@@ -268,12 +363,12 @@ func drawNormalIcon(dc *gg.Context, utilization *float64, col color.RGBA, p draw
 }
 
 // drawBarIcon draws a vertical filling bar indicator (bottom to top).
-func drawBarIcon(dc *gg.Context, utilization *float64, col color.RGBA, p drawParams) {
+func drawBarIcon(dc *gg.Context, utilization *float64, col, borderCol color.RGBA, p drawParams) {
 	border := 2 * p.s
 	size := float64(p.iconSize)
 
 	// Border rectangle
-	dc.SetColor(col)
+	dc.SetColor(borderCol)
 	dc.SetLineWidth(border)
 	dc.DrawRectangle(border/2, border/2, size-border, size-border)
 	dc.Stroke()
@@ -338,13 +433,13 @@ func mutedColor(c color.RGBA) color.RGBA {
 
 // drawBarProjIcon draws two side-by-side vertical bars: left = actual 5h consumption,
 // right = projected 5h consumption at window reset (muted colors).
-func drawBarProjIcon(dc *gg.Context, utilization *float64, col color.RGBA, projected *float64, projCol color.RGBA, p drawParams) {
+func drawBarProjIcon(dc *gg.Context, utilization *float64, col color.RGBA, projected *float64, projCol, borderCol color.RGBA, p drawParams) {
 	border := 2 * p.s
 	size := float64(p.iconSize)
 	gap := 1 * p.s
 
 	// Border rectangle
-	dc.SetColor(col)
+	dc.SetColor(borderCol)
 	dc.SetLineWidth(border)
 	dc.DrawRectangle(border/2, border/2, size-border, size-border)
 	dc.Stroke()
@@ -390,6 +485,48 @@ func drawUtilizationText(dc *gg.Context, utilization *float64, p drawParams) {
 	text := fmt.Sprintf("%d", int(*utilization))
 	drawCenteredText(dc, text, center, center, p.fontSize, p.haloSize, p.fontName,
 		color.RGBA{255, 255, 255, 255}, color.RGBA{0, 0, 0, 255})
+}
+
+func drawProviderAccent(dc *gg.Context, accent color.RGBA, p drawParams) {
+	size := math.Max(p.providerMarkSize, 12*p.s)
+	margin := 3 * p.s
+
+	x := margin
+	y := margin
+	switch p.providerMarkPos {
+	case "NE":
+		x = float64(p.iconSize) - size - margin
+	case "SW":
+		y = float64(p.iconSize) - size - margin
+	case "SE", "":
+		x = float64(p.iconSize) - size - margin
+		y = float64(p.iconSize) - size - margin
+	}
+
+	// Shadow plate for contrast against any indicator shape.
+	dc.SetColor(color.RGBA{0, 0, 0, 190})
+	dc.DrawRoundedRectangle(x+1*p.s, y+1*p.s, size, size, 2*p.s)
+	dc.Fill()
+
+	dc.SetColor(accent)
+	dc.DrawRoundedRectangle(x, y, size, size, 2*p.s)
+	dc.Fill()
+
+	dc.SetColor(color.RGBA{255, 255, 255, 220})
+	dc.SetLineWidth(math.Max(1*p.s, 1))
+	dc.DrawRoundedRectangle(x, y, size, size, 2*p.s)
+	dc.Stroke()
+}
+
+func providerAccentColor(provider Provider) color.RGBA {
+	switch provider {
+	case ProviderCodex:
+		return color.RGBA{120, 120, 120, 255}
+	case ProviderClaude:
+		return color.RGBA{255, 140, 0, 255}
+	default:
+		return color.RGBA{90, 90, 90, 255}
+	}
 }
 
 // drawCenteredText draws text centered at (cx, cy) with a halo shadow for contrast.

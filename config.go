@@ -6,21 +6,28 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Config holds the widget configuration.
 type Config struct {
-	ClaudeHome          string     `json:"claude_home,omitempty"`
-	PollIntervalSeconds int        `json:"poll_interval_seconds"`
-	FontSize            float64    `json:"font_size"`
-	FontName            string     `json:"font_name"`
-	HaloSize            float64    `json:"halo_size"`
-	IconSize            int        `json:"icon_size"`
-	Indicator           string     `json:"indicator"`
-	ShowText            *bool      `json:"show_text"`
-	ShowAccount         bool       `json:"show_account"`
-	Stats               bool       `json:"stats"`
-	Thresholds          Thresholds `json:"thresholds"`
+	Provider             string     `json:"provider,omitempty"`
+	ClaudeHome           string     `json:"claude_home,omitempty"`
+	CodexHome            string     `json:"codex_home,omitempty"`
+	PollIntervalSeconds  int        `json:"poll_interval_seconds"`
+	FontSize             float64    `json:"font_size"`
+	FontName             string     `json:"font_name"`
+	HaloSize             float64    `json:"halo_size"`
+	IconSize             int        `json:"icon_size"`
+	Indicator            string     `json:"indicator"`
+	ShowText             *bool      `json:"show_text"`
+	ProviderMark         bool       `json:"provider_mark"`
+	ProviderMarkSize     float64    `json:"provider_mark_size"`
+	ProviderMarkPosition string     `json:"provider_mark_position"`
+	ProviderMarkColor    string     `json:"provider_mark_color,omitempty"`
+	ShowAccount          bool       `json:"show_account"`
+	Stats                bool       `json:"stats"`
+	Thresholds           Thresholds `json:"thresholds"`
 }
 
 // Thresholds defines warning/critical utilization levels.
@@ -43,13 +50,17 @@ func init() {
 func defaultConfig() Config {
 	showText := true
 	return Config{
-		PollIntervalSeconds: 300,
-		FontSize:            34,
-		FontName:            "bold",
-		HaloSize:            2,
-		IconSize:            64,
-		Indicator:           "pie",
-		ShowText:            &showText,
+		PollIntervalSeconds:  300,
+		FontSize:             34,
+		FontName:             "bold",
+		HaloSize:             2,
+		IconSize:             64,
+		Indicator:            "pie",
+		ShowText:             &showText,
+		ProviderMark:         false,
+		ProviderMarkSize:     14,
+		ProviderMarkPosition: "SE",
+		ShowAccount:          false,
 		Thresholds: Thresholds{
 			Warning:  60,
 			Critical: 85,
@@ -66,17 +77,24 @@ func configShowText(cfg Config) bool {
 }
 
 // loadConfig loads config from disk, creating a default if it doesn't exist.
-// Missing fields keep their defaults via json.Unmarshal into a pre-populated struct.
 func loadConfig() Config {
+	return loadConfigWithMode(true)
+}
+
+// loadConfigWithMode loads config from disk. When createDefault is false, a missing
+// config file returns defaults without writing anything to disk.
+func loadConfigWithMode(createDefault bool) Config {
 	cfg := defaultConfig()
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			if writeErr := saveConfig(cfg); writeErr != nil {
-				log.Printf("Failed to write default config: %v", writeErr)
-			} else {
-				log.Printf("Created default config at %s", configPath)
+			if createDefault {
+				if writeErr := saveConfig(cfg); writeErr != nil {
+					log.Printf("Failed to write default config: %v", writeErr)
+				} else {
+					log.Printf("Created default config at %s", configPath)
+				}
 			}
 			return cfg
 		}
@@ -120,6 +138,34 @@ func loadConfig() Config {
 	}
 	if cfg.ShowText == nil {
 		cfg.ShowText = defaults.ShowText
+	}
+	if cfg.ProviderMarkSize <= 0 {
+		if cfg.ProviderMarkSize != 0 {
+			log.Printf("Invalid provider_mark_size %v in config, using default %v", cfg.ProviderMarkSize, defaults.ProviderMarkSize)
+		}
+		cfg.ProviderMarkSize = defaults.ProviderMarkSize
+	}
+	if cfg.ProviderMarkPosition == "" || !ValidProviderMarkPosition(cfg.ProviderMarkPosition) {
+		if cfg.ProviderMarkPosition != "" {
+			log.Printf("Unknown provider_mark_position %q in config, using default %q", cfg.ProviderMarkPosition, defaults.ProviderMarkPosition)
+		}
+		cfg.ProviderMarkPosition = defaults.ProviderMarkPosition
+	} else {
+		cfg.ProviderMarkPosition = strings.ToUpper(cfg.ProviderMarkPosition)
+	}
+	if cfg.ProviderMarkColor != "" {
+		if _, err := parseHexColor(cfg.ProviderMarkColor); err != nil {
+			log.Printf("Invalid provider_mark_color in config: %v, ignoring", err)
+			cfg.ProviderMarkColor = ""
+		}
+	}
+	if cfg.Provider != "" {
+		if !ValidProviderName(cfg.Provider) {
+			log.Printf("Unknown provider %q in config, using autodetect", cfg.Provider)
+			cfg.Provider = defaults.Provider
+		} else {
+			cfg.Provider = string(normalizeProvider(cfg.Provider))
+		}
 	}
 	if cfg.Thresholds.Warning <= 0 || cfg.Thresholds.Warning > 100 {
 		log.Printf("Invalid thresholds.warning %v in config, using default %v", cfg.Thresholds.Warning, defaults.Thresholds.Warning)

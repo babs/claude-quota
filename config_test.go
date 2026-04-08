@@ -23,9 +23,26 @@ func TestLoadConfig_Default(t *testing.T) {
 	if cfg.Thresholds.Warning != 60 {
 		t.Errorf("Warning = %f, want 60", cfg.Thresholds.Warning)
 	}
+	if cfg.Provider != "" {
+		t.Errorf("Provider = %q, want empty autodetect default", cfg.Provider)
+	}
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		t.Error("loadConfig should create default config file")
+	}
+}
+
+func TestLoadConfig_EmptyProviderStaysAutodetect(t *testing.T) {
+	orig := configPath
+	defer func() { configPath = orig }()
+
+	dir := t.TempDir()
+	configPath = filepath.Join(dir, "config.json")
+	os.WriteFile(configPath, []byte(`{"provider":"","poll_interval_seconds":60}`), 0600)
+
+	cfg := loadConfig()
+	if cfg.Provider != "" {
+		t.Errorf("Provider = %q, want empty autodetect", cfg.Provider)
 	}
 }
 
@@ -70,6 +87,43 @@ func TestLoadConfig_PartialFile(t *testing.T) {
 	}
 	if cfg.FontSize != 34 {
 		t.Errorf("FontSize = %f, want 34 (default)", cfg.FontSize)
+	}
+	if cfg.ProviderMark {
+		t.Errorf("ProviderMark = %v, want false (default)", cfg.ProviderMark)
+	}
+	if cfg.ProviderMarkSize != 14 {
+		t.Errorf("ProviderMarkSize = %f, want 14 (default)", cfg.ProviderMarkSize)
+	}
+	if cfg.ProviderMarkPosition != "SE" {
+		t.Errorf("ProviderMarkPosition = %q, want SE (default)", cfg.ProviderMarkPosition)
+	}
+}
+
+func TestLoadConfig_ValidProviderMarkColor(t *testing.T) {
+	orig := configPath
+	defer func() { configPath = orig }()
+
+	dir := t.TempDir()
+	configPath = filepath.Join(dir, "config.json")
+	os.WriteFile(configPath, []byte(`{"provider_mark_color":"#DE7356"}`), 0600)
+
+	cfg := loadConfig()
+	if cfg.ProviderMarkColor != "#DE7356" {
+		t.Errorf("ProviderMarkColor = %q, want #DE7356", cfg.ProviderMarkColor)
+	}
+}
+
+func TestLoadConfig_InvalidProviderMarkColorReset(t *testing.T) {
+	orig := configPath
+	defer func() { configPath = orig }()
+
+	dir := t.TempDir()
+	configPath = filepath.Join(dir, "config.json")
+	os.WriteFile(configPath, []byte(`{"provider_mark_color":"not-a-color"}`), 0600)
+
+	cfg := loadConfig()
+	if cfg.ProviderMarkColor != "" {
+		t.Errorf("ProviderMarkColor = %q, want empty (invalid hex should be reset)", cfg.ProviderMarkColor)
 	}
 }
 

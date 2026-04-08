@@ -10,3 +10,20 @@ repos:
       - id: go-vet
       - id: go-build
       - id: go-unit-tests
+  - repo: local
+    hooks:
+      # Scoped to scripts/install.sh only: other .sh files in the repo have
+      # pre-existing shellcheck findings that are out of scope for this
+      # project's installer hardening work.
+      - id: shellcheck-install-sh
+        name: shellcheck install.sh
+        entry: shellcheck scripts/install.sh
+        language: system
+        pass_filenames: false
+        files: ^scripts/install\.sh$
+      - id: bats-install-sh
+        name: bats install.sh tests
+        entry: bats tests/install.bats
+        language: system
+        pass_filenames: false
+        files: ^(scripts/install\.sh|tests/install\.bats)$

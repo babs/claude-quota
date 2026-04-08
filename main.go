@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -47,11 +48,17 @@ func main() {
 
 	showVersion := flag.Bool("version", false, "show version and exit")
 	doUpdate := flag.Bool("update", false, "check and update to latest release")
+	dryRun := flag.Bool("dry-run", false, "fetch quota once, print results, and exit without touching config, stats, or tray")
+	providerFlag := flag.String("provider", "", "quota provider: claude or codex (env: CLAUDE_QUOTA_PROVIDER)")
 	pollInterval := flag.Int("poll-interval", 0, "poll interval in seconds (env: CLAUDE_QUOTA_POLL_INTERVAL)")
 	fontSize := flag.Float64("font-size", 0, "icon font size (env: CLAUDE_QUOTA_FONT_SIZE)")
 	fontName := flag.String("font-name", "", "icon font name: bold, regular, mono, monobold, bitmap (env: CLAUDE_QUOTA_FONT_NAME)")
 	haloSize := flag.Float64("halo-size", -1, "text halo/outline size in pixels, 0 to disable (env: CLAUDE_QUOTA_HALO_SIZE)")
 	iconSize := flag.Int("icon-size", 0, "icon size in pixels (env: CLAUDE_QUOTA_ICON_SIZE)")
+	providerMark := flag.Bool("provider-mark", false, "show provider accent mark on icon (env: CLAUDE_QUOTA_PROVIDER_MARK)")
+	providerMarkSize := flag.Float64("provider-mark-size", 0, "provider accent mark size in base pixels (env: CLAUDE_QUOTA_PROVIDER_MARK_SIZE)")
+	providerMarkPosition := flag.String("provider-mark-position", "", "provider accent position: NW, NE, SW, SE (env: CLAUDE_QUOTA_PROVIDER_MARK_POSITION)")
+	providerMarkColor := flag.String("provider-mark-color", "", "override provider accent color, hex #RRGGBB (env: CLAUDE_QUOTA_PROVIDER_MARK_COLOR)")
 	warningThreshold := flag.Float64("warning-threshold", 0, "warning utilization threshold in % (env: CLAUDE_QUOTA_WARNING_THRESHOLD)")
 	criticalThreshold := flag.Float64("critical-threshold", 0, "critical utilization threshold in % (env: CLAUDE_QUOTA_CRITICAL_THRESHOLD)")
 	indicator := flag.String("indicator", "", "indicator type: pie, bar, arc, bar-proj (env: CLAUDE_QUOTA_INDICATOR)")
@@ -59,6 +66,7 @@ func main() {
 	showAccount := flag.Bool("show-account", false, "show account info in menu (env: CLAUDE_QUOTA_SHOW_ACCOUNT)")
 	stats := flag.Bool("stats", false, "enable local stats collection (env: CLAUDE_QUOTA_STATS)")
 	claudeHome := flag.String("claude-home", "", "home directory for Claude credentials (env: CLAUDE_QUOTA_CLAUDE_HOME)")
+	codexHome := flag.String("codex-home", "", "home directory for Codex credentials (env: CLAUDE_QUOTA_CODEX_HOME)")
 	flag.Usage = func() {
 		fmt.Print(versionStringLong())
 		fmt.Fprintf(os.Stderr, "\nUsage: %s [options]\n\nOptions:\n", os.Args[0])
@@ -76,28 +84,49 @@ func main() {
 		return
 	}
 
-	cfg := loadConfig()
+	cfg := loadConfigWithMode(!*dryRun)
 
-	// Resolve claude-home: config < env < flag.
+	// Resolve provider-specific credential paths FIRST (config < env < flag),
+	// so that resolveProvider's defaultProvider() fallback stats the user's
+	// actual credential files when claude_home/codex_home are overridden.
 	if cfg.ClaudeHome != "" {
-		credentialsPath = filepath.Join(cfg.ClaudeHome, ".claude", ".credentials.json")
+		claudeCredentialsPath = filepath.Join(cfg.ClaudeHome, ".claude", ".credentials.json")
+	}
+	if cfg.CodexHome != "" {
+		codexAuthPath = filepath.Join(cfg.CodexHome, ".codex", "auth.json")
 	}
 	if v := os.Getenv("CLAUDE_QUOTA_CLAUDE_HOME"); v != "" {
-		credentialsPath = filepath.Join(v, ".claude", ".credentials.json")
+		claudeCredentialsPath = filepath.Join(v, ".claude", ".credentials.json")
+	}
+	if v := os.Getenv("CLAUDE_QUOTA_CODEX_HOME"); v != "" {
+		codexAuthPath = filepath.Join(v, ".codex", "auth.json")
 	}
 	if *claudeHome != "" {
-		credentialsPath = filepath.Join(*claudeHome, ".claude", ".credentials.json")
+		claudeCredentialsPath = filepath.Join(*claudeHome, ".claude", ".credentials.json")
+	}
+	if *codexHome != "" {
+		codexAuthPath = filepath.Join(*codexHome, ".codex", "auth.json")
 	}
 
-	fmt.Println("WARNING: This tool uses Claude Code's OAuth client ID to access your")
-	fmt.Println("quota data via an undocumented API. This is not sanctioned by Anthropic")
-	fmt.Println("and may violate the Terms of Service. Use at your own risk.")
-	fmt.Println()
+	provider := resolveProvider(*providerFlag, os.Getenv("CLAUDE_QUOTA_PROVIDER"), cfg.Provider)
 
-	credentialsPreCheck()
+	authPath := claudeCredentialsPath
+	if provider == ProviderCodex {
+		authPath = codexAuthPath
+	}
+
+	if provider == ProviderClaude {
+		fmt.Println("WARNING: This tool uses Claude Code credentials to access quota data via")
+		fmt.Println("an undocumented Anthropic API. This is not sanctioned by Anthropic")
+		fmt.Println("and may violate the Terms of Service. Use at your own risk.")
+		fmt.Println()
+	}
+
+	credentialsPreCheck(provider, authPath)
 
 	fmt.Println(versionString())
-	fmt.Printf("Credentials: %s\n", credentialsPath)
+	fmt.Printf("Provider: %s\n", provider)
+	fmt.Printf("Credentials: %s\n", authPath)
 	fmt.Printf("Config: %s\n", configPath)
 
 	// Only pass ShowText when the user explicitly set -show-text.
@@ -106,6 +135,7 @@ func main() {
 	var showTextOverride *bool
 	var showAccountOverride *bool
 	var statsOverride *bool
+	var providerMarkOverride *bool
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "show-text" {
 			showTextOverride = showText
@@ -116,28 +146,47 @@ func main() {
 		if f.Name == "stats" {
 			statsOverride = stats
 		}
+		if f.Name == "provider-mark" {
+			providerMarkOverride = providerMark
+		}
 	})
 
 	applyOverrides(&cfg, overrides{
-		PollInterval:      *pollInterval,
-		FontSize:          *fontSize,
-		FontName:          *fontName,
-		HaloSize:          *haloSize,
-		IconSize:          *iconSize,
-		Indicator:         *indicator,
-		ShowText:          showTextOverride,
-		ShowAccount:       showAccountOverride,
-		Stats:             statsOverride,
-		WarningThreshold:  *warningThreshold,
-		CriticalThreshold: *criticalThreshold,
+		PollInterval:         *pollInterval,
+		FontSize:             *fontSize,
+		FontName:             *fontName,
+		HaloSize:             *haloSize,
+		IconSize:             *iconSize,
+		ProviderMark:         providerMarkOverride,
+		ProviderMarkSize:     *providerMarkSize,
+		ProviderMarkPosition: *providerMarkPosition,
+		ProviderMarkColor:    *providerMarkColor,
+		Indicator:            *indicator,
+		ShowText:             showTextOverride,
+		ShowAccount:          showAccountOverride,
+		Stats:                statsOverride,
+		WarningThreshold:     *warningThreshold,
+		CriticalThreshold:    *criticalThreshold,
 	})
 
 	client := &http.Client{Timeout: 30 * time.Second}
 
-	creds, err := NewOAuthCredentials()
+	creds, err := NewOAuthCredentials(provider)
 	if err != nil {
 		fmt.Printf("\nError: %v\n", err)
 		os.Exit(1)
+	}
+
+	if *dryRun {
+		quota := NewQuotaClient(creds, client)
+		if !quota.Fetch() {
+			fmt.Println()
+			fmt.Println(formatDryRunSummary(provider, authPath, quota.State()))
+			os.Exit(1)
+		}
+		fmt.Println()
+		fmt.Println(formatDryRunSummary(provider, authPath, quota.State()))
+		return
 	}
 
 	var statsStore *StatsStore
@@ -153,7 +202,7 @@ func main() {
 		fmt.Println("Stats: disabled")
 	}
 
-	resolver := NewAccountResolver(client, statsStore)
+	resolver := NewAccountResolver(provider, client, statsStore)
 	app := NewApp(cfg, creds, client, statsStore, resolver)
 
 	// Handle interrupt for clean shutdown (SIGINT on all platforms, SIGTERM on Unix).
@@ -168,24 +217,57 @@ func main() {
 
 	app.Run()
 
-	if app.restartRequested {
+	if app.restartRequested.Load() {
 		execSelf()
 	}
 }
 
+// resolveProvider picks the active provider using explicit > implicit precedence:
+// flag > env > config > auto-detect. Invalid values from flag and env are logged
+// and fall through to the next source. defaultProvider() (which logs its own
+// "Auto-detected …" line) is only invoked as a final fallback, so explicit
+// invocations stay quiet.
+func resolveProvider(flagVal, envVal, cfgVal string) Provider {
+	if flagVal != "" {
+		if ValidProviderName(flagVal) {
+			return normalizeProvider(flagVal)
+		}
+		log.Printf("Ignoring invalid -provider=%q", flagVal)
+	}
+	if envVal != "" {
+		if ValidProviderName(envVal) {
+			return normalizeProvider(envVal)
+		}
+		log.Printf("Ignoring invalid CLAUDE_QUOTA_PROVIDER=%q", envVal)
+	}
+	if cfgVal != "" {
+		return normalizeProvider(cfgVal)
+	}
+	return defaultProvider()
+}
+
 // overrides holds CLI flag values for config overrides.
+//
+// Note: no Provider field. The active provider is resolved by resolveProvider
+// (flag > env > config > auto-detect) and used for runtime wiring directly;
+// mutating cfg.Provider here would have been dead code because nothing reads
+// cfg.Provider after applyOverrides, and the on-disk config is not rewritten.
 type overrides struct {
-	PollInterval      int
-	FontSize          float64
-	FontName          string
-	HaloSize          float64
-	IconSize          int
-	Indicator         string
-	ShowText          *bool
-	ShowAccount       *bool
-	Stats             *bool
-	WarningThreshold  float64
-	CriticalThreshold float64
+	PollInterval         int
+	FontSize             float64
+	FontName             string
+	HaloSize             float64
+	IconSize             int
+	ProviderMark         *bool
+	ProviderMarkSize     float64
+	ProviderMarkPosition string
+	ProviderMarkColor    string
+	Indicator            string
+	ShowText             *bool
+	ShowAccount          *bool
+	Stats                *bool
+	WarningThreshold     float64
+	CriticalThreshold    float64
 }
 
 // applyIntOverride applies an int override from env var and flag.
@@ -239,6 +321,12 @@ func applyStringOverride(target *string, envKey, flagName, flagVal string, valid
 
 // applyOverrides applies env vars and flags to config. Priority: flag > env > config file.
 func applyOverrides(cfg *Config, o overrides) {
+	if cfg.ProviderMarkSize <= 0 {
+		cfg.ProviderMarkSize = defaultConfig().ProviderMarkSize
+	}
+	if cfg.ProviderMarkPosition == "" {
+		cfg.ProviderMarkPosition = defaultConfig().ProviderMarkPosition
+	}
 	applyIntOverride(&cfg.PollIntervalSeconds, "CLAUDE_QUOTA_POLL_INTERVAL", o.PollInterval,
 		func(i int) bool { return i > 0 })
 	applyFloatOverride(&cfg.FontSize, "CLAUDE_QUOTA_FONT_SIZE", o.FontSize, o.FontSize > 0,
@@ -248,6 +336,13 @@ func applyOverrides(cfg *Config, o overrides) {
 		func(f float64) bool { return f >= 0 })
 	applyIntOverride(&cfg.IconSize, "CLAUDE_QUOTA_ICON_SIZE", o.IconSize,
 		func(i int) bool { return i > 0 })
+	applyFloatOverride(&cfg.ProviderMarkSize, "CLAUDE_QUOTA_PROVIDER_MARK_SIZE", o.ProviderMarkSize, o.ProviderMarkSize > 0,
+		func(f float64) bool { return f > 0 })
+	applyStringOverride(&cfg.ProviderMarkPosition, "CLAUDE_QUOTA_PROVIDER_MARK_POSITION", "provider-mark-position", o.ProviderMarkPosition, ValidProviderMarkPosition)
+	if cfg.ProviderMarkPosition != "" {
+		cfg.ProviderMarkPosition = strings.ToUpper(cfg.ProviderMarkPosition)
+	}
+	applyStringOverride(&cfg.ProviderMarkColor, "CLAUDE_QUOTA_PROVIDER_MARK_COLOR", "provider-mark-color", o.ProviderMarkColor, ValidHexColor)
 	applyStringOverride(&cfg.Indicator, "CLAUDE_QUOTA_INDICATOR", "indicator", o.Indicator, ValidIndicatorName)
 
 	// ShowText: unique tri-state parsing (true/1, false/0).
@@ -265,6 +360,20 @@ func applyOverrides(cfg *Config, o overrides) {
 	}
 	if o.ShowText != nil {
 		cfg.ShowText = o.ShowText
+	}
+
+	if v := os.Getenv("CLAUDE_QUOTA_PROVIDER_MARK"); v != "" {
+		switch v {
+		case "true", "1":
+			cfg.ProviderMark = true
+		case "false", "0":
+			cfg.ProviderMark = false
+		default:
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_PROVIDER_MARK=%q", v)
+		}
+	}
+	if o.ProviderMark != nil {
+		cfg.ProviderMark = *o.ProviderMark
 	}
 
 	// ShowAccount: env < flag.

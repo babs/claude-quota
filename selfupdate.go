@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -18,10 +19,19 @@ import (
 // updateHTTPClient is used for update check and download requests.
 var updateHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
+var updateDownloadClient = &http.Client{Timeout: 10 * time.Minute}
+
+var githubAPIBaseURL = "https://api.github.com"
+
+const latestReleaseResponseLimit = 1 << 20
+
+func latestReleaseURL() string {
+	return fmt.Sprintf("%s/repos/%s/releases/latest", githubAPIBaseURL, GithubRepo)
+}
+
 // fetchLatestVersion queries GitHub and returns the latest release tag.
 func fetchLatestVersion() (string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", GithubRepo)
-	resp, err := updateHTTPClient.Get(url)
+	resp, err := updateHTTPClient.Get(latestReleaseURL())
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
@@ -34,7 +44,7 @@ func fetchLatestVersion() (string, error) {
 	var release struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, latestReleaseResponseLimit)).Decode(&release); err != nil {
 		return "", fmt.Errorf("parse failed: %w", err)
 	}
 	return release.Name, nil
@@ -57,8 +67,8 @@ func applyUpdate(version string) error {
 	}
 
 	log.Printf("Downloading %s...", downloadURL)
-	// No client timeout — downloads can be large and slow on constrained links.
-	dlResp, err := http.Get(downloadURL)
+	// Use a generous timeout so stalled connections do not block the tray update forever.
+	dlResp, err := updateDownloadClient.Get(downloadURL)
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}

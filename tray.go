@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/systray"
@@ -29,9 +31,14 @@ type App struct {
 	resolver         *AccountResolver
 	account          AccountInfo
 	quit             chan struct{} // closed on shutdown
-	restartRequested bool          // set before shutdown to trigger re-exec
+	restartRequested atomic.Bool   // set before shutdown to trigger re-exec
 	fetchMu          sync.Mutex    // serializes refreshAccount+Fetch+record across goroutines
 	uiMu             sync.Mutex    // serializes updateUI calls
+
+	// Parsed once at construction from config.ProviderMarkColor to avoid
+	// re-parsing the hex string on every render tick. A.A == 0 means "no
+	// override" (parseHexColor always returns A = 255 on success).
+	providerMarkColor color.RGBA
 
 	// Update state.
 	updateMu      sync.Mutex
@@ -41,6 +48,7 @@ type App struct {
 	// Menu items updated dynamically.
 	mAccountEmail       *systray.MenuItem
 	mAccountOrg         *systray.MenuItem
+	mProvider           *systray.MenuItem
 	mFiveHour           *systray.MenuItem
 	mProjection         *systray.MenuItem
 	mSaturation         *systray.MenuItem
@@ -57,7 +65,7 @@ type App struct {
 
 // NewApp creates an App from the given config and credentials.
 func NewApp(cfg Config, creds *OAuthCredentials, client *http.Client, stats *StatsStore, resolver *AccountResolver) *App {
-	return &App{
+	a := &App{
 		config:   cfg,
 		creds:    creds,
 		quota:    NewQuotaClient(creds, client),
@@ -65,6 +73,14 @@ func NewApp(cfg Config, creds *OAuthCredentials, client *http.Client, stats *Sta
 		resolver: resolver,
 		quit:     make(chan struct{}),
 	}
+	// Config load already validated this via parseHexColor; a.A stays 0 when
+	// no override is set, which renderIcon treats as "use the default accent".
+	if cfg.ProviderMarkColor != "" {
+		if c, err := parseHexColor(cfg.ProviderMarkColor); err == nil {
+			a.providerMarkColor = c
+		}
+	}
+	return a
 }
 
 // Run starts the systray. Blocks until the tray exits.
@@ -86,7 +102,7 @@ func (a *App) Shutdown() {
 // onReady is called by systray when the tray is ready.
 func (a *App) onReady() {
 	systray.SetTitle("")
-	systray.SetTooltip("Claude Quota")
+	systray.SetTooltip(providerQuotaTitle(a.creds.Provider()))
 
 	// Create menu items.
 	if a.config.ShowAccount {
@@ -97,6 +113,8 @@ func (a *App) onReady() {
 		a.mAccountOrg.Disable()
 		a.mAccountOrg.Hide()
 	}
+	a.mProvider = systray.AddMenuItem(fmt.Sprintf("Provider: %s", providerDisplayName(a.creds.Provider())), "Active quota provider")
+	a.mProvider.Disable()
 	a.mFiveHour = systray.AddMenuItem("5h: --", "5-hour quota")
 	a.mFiveHour.Disable()
 	a.mProjection = systray.AddMenuItem("", "Projected utilization at reset")
@@ -113,7 +131,7 @@ func (a *App) onReady() {
 	a.mSevenDaySaturation = systray.AddMenuItem("", "Projected 7d saturation time")
 	a.mSevenDaySaturation.Disable()
 	a.mSevenDaySaturation.Hide()
-	a.mSevenDaySonnet = systray.AddMenuItem("Sonnet 7d: --", "7-day Sonnet quota")
+	a.mSevenDaySonnet = systray.AddMenuItem(extraQuotaLabel(QuotaState{Provider: a.creds.Provider()})+": --", "Additional quota bucket")
 	a.mSevenDaySonnet.Disable()
 
 	systray.AddSeparator()
@@ -214,6 +232,10 @@ func (a *App) fetchCycle() {
 
 	a.refreshAccount()
 	if a.quota.Fetch() {
+		// Codex email comes from the usage API, not a separate profile endpoint.
+		if state := a.quota.State(); state.AccountEmail != "" {
+			a.account.EmailAddress = state.AccountEmail
+		}
 		a.recordStats()
 	} else {
 		a.recordError()
@@ -261,7 +283,7 @@ func (a *App) recordError() {
 	if state.Error == "" {
 		return
 	}
-	a.stats.RecordError(a.account.AccountUUID, state.ErrorType, state.HTTPStatus, state.Error)
+	a.stats.RecordError(state.Provider, a.account.AccountUUID, state.ErrorType, state.HTTPStatus, state.Error)
 }
 
 // updateUI refreshes the icon and menu items from current state.
@@ -279,12 +301,16 @@ func (a *App) updateUI() {
 
 	// Update icon.
 	img := renderIcon(state, a.config.Thresholds, RenderOptions{
-		FontSize:  a.config.FontSize,
-		IconSize:  a.config.IconSize,
-		FontName:  a.config.FontName,
-		HaloSize:  a.config.HaloSize,
-		Indicator: a.config.Indicator,
-		ShowText:  configShowText(a.config),
+		FontSize:             a.config.FontSize,
+		IconSize:             a.config.IconSize,
+		FontName:             a.config.FontName,
+		HaloSize:             a.config.HaloSize,
+		Indicator:            a.config.Indicator,
+		ShowText:             configShowText(a.config),
+		ProviderMark:         a.config.ProviderMark,
+		ProviderMarkSize:     a.config.ProviderMarkSize,
+		ProviderMarkPosition: a.config.ProviderMarkPosition,
+		ProviderMarkColor:    a.providerMarkColor,
 	})
 	iconData, err := iconToBytes(img)
 	if err != nil {
@@ -294,7 +320,7 @@ func (a *App) updateUI() {
 	}
 
 	// Update tooltip.
-	systray.SetTooltip(buildTooltip(state))
+	systray.SetTooltip(buildTooltip(state, a.creds.Provider()))
 
 	// Update menu items.
 	if a.mAccountEmail != nil {
@@ -312,6 +338,9 @@ func (a *App) updateUI() {
 		} else {
 			a.mAccountOrg.Hide()
 		}
+	}
+	if a.mProvider != nil {
+		a.mProvider.SetTitle(fmt.Sprintf("Provider: %s", providerDisplayName(state.Provider)))
 	}
 	a.mFiveHour.SetTitle(formatQuotaLine("5h", state.FiveHour, state.FiveHourResets))
 	if state.FiveHour != nil {
@@ -349,7 +378,7 @@ func (a *App) updateUI() {
 		a.mSevenDayProjection.Hide()
 		a.mSevenDaySaturation.Hide()
 	}
-	a.mSevenDaySonnet.SetTitle(formatQuotaLine("Sonnet 7d", state.SevenDaySonnet, state.SevenDaySonnetResets))
+	a.mSevenDaySonnet.SetTitle(formatQuotaLine(extraQuotaLabel(state), state.SevenDaySonnet, state.SevenDaySonnetResets))
 
 	a.mUpdated.SetTitle(formatUpdatedAgo(state.LastUpdate))
 }
@@ -369,7 +398,7 @@ func (a *App) handleUpdateClick() {
 	case updatePhaseApplied:
 		a.mCheckUpdate.SetTitle("Restarting...")
 		a.mCheckUpdate.Disable()
-		a.restartRequested = true
+		a.restartRequested.Store(true)
 		a.Shutdown()
 	}
 }
@@ -431,8 +460,8 @@ func (a *App) doApplyUpdate(version string) {
 }
 
 // buildTooltip generates tooltip text from state.
-func buildTooltip(state QuotaState) string {
-	lines := "Claude Quota"
+func buildTooltip(state QuotaState, provider Provider) string {
+	lines := providerQuotaTitle(provider)
 
 	if state.Error != "" {
 		lines += "\nError: " + state.Error
@@ -456,7 +485,7 @@ func buildTooltip(state QuotaState) string {
 			}
 		}
 		if state.SevenDaySonnet != nil {
-			lines += "\n" + formatQuotaLine("Sonnet 7d", state.SevenDaySonnet, state.SevenDaySonnetResets)
+			lines += "\n" + formatQuotaLine(extraQuotaLabel(state), state.SevenDaySonnet, state.SevenDaySonnetResets)
 		}
 	}
 
@@ -466,4 +495,14 @@ func buildTooltip(state QuotaState) string {
 	}
 
 	return lines
+}
+
+func extraQuotaLabel(state QuotaState) string {
+	if state.SevenDaySonnetLabel != "" {
+		return state.SevenDaySonnetLabel
+	}
+	if state.Provider == ProviderCodex {
+		return "Additional"
+	}
+	return "Sonnet 7d"
 }

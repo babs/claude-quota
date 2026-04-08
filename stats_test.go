@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -25,6 +29,14 @@ func TestNewStatsStore(t *testing.T) {
 	}
 	if tableName != "fetch_stats" {
 		t.Errorf("expected table name fetch_stats, got %q", tableName)
+	}
+
+	var version int
+	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("PRAGMA user_version failed: %v", err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion)
 	}
 }
 
@@ -51,6 +63,7 @@ func TestRecordFetch_Full(t *testing.T) {
 	sonnet := 10.0
 
 	state := QuotaState{
+		Provider:             ProviderClaude,
 		FiveHour:             &fiveH,
 		FiveHourResets:       &resets5h,
 		FiveHourProjected:    &fiveHProj,
@@ -67,15 +80,19 @@ func TestRecordFetch_Full(t *testing.T) {
 	store.RecordFetch(state, "account-123")
 
 	var (
+		provider     string
 		fetchedAt    int64
 		accountID    sql.NullString
 		fiveHourUtil sql.NullFloat64
 		resetsAt     sql.NullInt64
 	)
-	err = store.db.QueryRow("SELECT fetched_at, account_id, five_hour_util, five_hour_resets_at FROM fetch_stats WHERE id=1").
-		Scan(&fetchedAt, &accountID, &fiveHourUtil, &resetsAt)
+	err = store.db.QueryRow("SELECT provider, fetched_at, account_id, five_hour_util, five_hour_resets_at FROM fetch_stats WHERE id=1").
+		Scan(&provider, &fetchedAt, &accountID, &fiveHourUtil, &resetsAt)
 	if err != nil {
 		t.Fatalf("query error: %v", err)
+	}
+	if provider != "claude" {
+		t.Errorf("provider = %q, want claude", provider)
 	}
 	if fetchedAt != now.Unix() {
 		t.Errorf("fetched_at = %d, want %d", fetchedAt, now.Unix())
@@ -104,19 +121,24 @@ func TestRecordFetch_NilFields(t *testing.T) {
 
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	state := QuotaState{
+		Provider:   ProviderClaude,
 		LastUpdate: &now,
 	}
 
 	store.RecordFetch(state, "")
 
 	var (
+		provider     string
 		fiveHourUtil sql.NullFloat64
 		accountID    sql.NullString
 	)
-	err = store.db.QueryRow("SELECT five_hour_util, account_id FROM fetch_stats WHERE id=1").
-		Scan(&fiveHourUtil, &accountID)
+	err = store.db.QueryRow("SELECT provider, five_hour_util, account_id FROM fetch_stats WHERE id=1").
+		Scan(&provider, &fiveHourUtil, &accountID)
 	if err != nil {
 		t.Fatalf("query error: %v", err)
+	}
+	if provider != "claude" {
+		t.Errorf("provider = %q, want claude", provider)
 	}
 	if fiveHourUtil.Valid {
 		t.Errorf("five_hour_util should be NULL, got %v", fiveHourUtil.Float64)
@@ -139,7 +161,7 @@ func TestRecordFetch_MultipleRows(t *testing.T) {
 
 	for i := range 3 {
 		now := time.Date(2026, 3, 1, 12, i, 0, 0, time.UTC)
-		state := QuotaState{LastUpdate: &now}
+		state := QuotaState{Provider: ProviderClaude, LastUpdate: &now}
 		store.RecordFetch(state, "acct")
 	}
 
@@ -204,18 +226,22 @@ func TestAccountsTableExists(t *testing.T) {
 
 func TestRecordError_Full(t *testing.T) {
 	store := newTestStore(t)
-	store.RecordError("acct-uuid", "http", 401, "Token invalid")
+	store.RecordError(ProviderClaude, "acct-uuid", "http", 401, "Token invalid")
 
 	var (
+		provider   string
 		accountID  sql.NullString
 		errType    string
 		httpStatus sql.NullInt64
 		message    sql.NullString
 	)
-	err := store.db.QueryRow("SELECT account_id, error_type, http_status, message FROM fetch_errors WHERE id=1").
-		Scan(&accountID, &errType, &httpStatus, &message)
+	err := store.db.QueryRow("SELECT provider, account_id, error_type, http_status, message FROM fetch_errors WHERE id=1").
+		Scan(&provider, &accountID, &errType, &httpStatus, &message)
 	if err != nil {
 		t.Fatalf("query error: %v", err)
+	}
+	if provider != "claude" {
+		t.Errorf("provider = %q, want claude", provider)
 	}
 	if !accountID.Valid || accountID.String != "acct-uuid" {
 		t.Errorf("account_id = %v, want acct-uuid", accountID)
@@ -233,16 +259,20 @@ func TestRecordError_Full(t *testing.T) {
 
 func TestRecordError_NilOptionalFields(t *testing.T) {
 	store := newTestStore(t)
-	store.RecordError("", "network", 0, "connection refused")
+	store.RecordError(ProviderClaude, "", "network", 0, "connection refused")
 
 	var (
+		provider   string
 		accountID  sql.NullString
 		httpStatus sql.NullInt64
 	)
-	err := store.db.QueryRow("SELECT account_id, http_status FROM fetch_errors WHERE id=1").
-		Scan(&accountID, &httpStatus)
+	err := store.db.QueryRow("SELECT provider, account_id, http_status FROM fetch_errors WHERE id=1").
+		Scan(&provider, &accountID, &httpStatus)
 	if err != nil {
 		t.Fatalf("query error: %v", err)
+	}
+	if provider != "claude" {
+		t.Errorf("provider = %q, want claude", provider)
 	}
 	if accountID.Valid {
 		t.Errorf("account_id should be NULL, got %v", accountID.String)
@@ -268,20 +298,24 @@ func TestUpsertAccount(t *testing.T) {
 		OrganizationUUID: "org-456",
 		OrganizationName: "Test Org",
 	}
-	store.UpsertAccount("hash-abc", info, "pro", "tier4")
+	store.UpsertAccount(ProviderClaude, "hash-abc", info, "pro", "tier4")
 
 	var (
+		provider      string
 		accountUUID   string
 		email         sql.NullString
 		subType       sql.NullString
 		rateLimitTier sql.NullString
 	)
 	err := store.db.QueryRow(`
-		SELECT account_uuid, email_address, subscription_type, rate_limit_tier
+		SELECT provider, account_uuid, email_address, subscription_type, rate_limit_tier
 		FROM accounts WHERE refresh_token_hash = 'hash-abc'`,
-	).Scan(&accountUUID, &email, &subType, &rateLimitTier)
+	).Scan(&provider, &accountUUID, &email, &subType, &rateLimitTier)
 	if err != nil {
 		t.Fatalf("query error: %v", err)
+	}
+	if provider != "claude" {
+		t.Errorf("provider = %q, want claude", provider)
 	}
 	if accountUUID != "uuid-123" {
 		t.Errorf("account_uuid = %q, want uuid-123", accountUUID)
@@ -302,7 +336,7 @@ func TestLookupAccount_Hit(t *testing.T) {
 		OrganizationUUID: "org-456",
 		OrganizationName: "Test Org",
 	}
-	store.UpsertAccount("hash-abc", info, "pro", "tier4")
+	store.UpsertAccount(ProviderClaude, "hash-abc", info, "pro", "tier4")
 
 	got, ok := store.LookupAccount("hash-abc")
 	if !ok {
@@ -322,7 +356,7 @@ func TestLookupAccount_Hit(t *testing.T) {
 func TestLookupAccount_BumpsUpdatedAt(t *testing.T) {
 	store := newTestStore(t)
 	info := AccountInfo{AccountUUID: "uuid-123"}
-	store.UpsertAccount("hash-abc", info, "", "")
+	store.UpsertAccount(ProviderClaude, "hash-abc", info, "", "")
 
 	// Read initial updated_at.
 	var updatedBefore int64
@@ -337,5 +371,258 @@ func TestLookupAccount_BumpsUpdatedAt(t *testing.T) {
 	store.db.QueryRow("SELECT updated_at FROM accounts WHERE refresh_token_hash = 'hash-abc'").Scan(&updatedAfter)
 	if updatedAfter <= updatedBefore {
 		t.Errorf("updated_at should have been bumped: before=%d, after=%d", updatedBefore, updatedAfter)
+	}
+}
+
+func TestRecordFetch_CodexProvider(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	state := QuotaState{
+		Provider:   ProviderCodex,
+		LastUpdate: &now,
+	}
+
+	store.RecordFetch(state, "acct-codex")
+
+	var provider string
+	err := store.db.QueryRow("SELECT provider FROM fetch_stats WHERE id=1").Scan(&provider)
+	if err != nil {
+		t.Fatalf("query error: %v", err)
+	}
+	if provider != "codex" {
+		t.Fatalf("provider = %q, want codex", provider)
+	}
+}
+
+func TestSchemaMigration_DefaultsProviderToClaude(t *testing.T) {
+	origPath := statsDBPath
+	statsDBPath = filepath.Join(t.TempDir(), "stats.db")
+	defer func() { statsDBPath = origPath }()
+
+	db, err := sql.Open("sqlite", statsDBPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error: %v", err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`
+		CREATE TABLE fetch_stats (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			fetched_at INTEGER NOT NULL,
+			account_id TEXT
+		);
+		CREATE TABLE accounts (
+			refresh_token_hash TEXT PRIMARY KEY,
+			account_uuid TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+		CREATE TABLE fetch_errors (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			occurred_at INTEGER NOT NULL,
+			account_id TEXT,
+			error_type TEXT NOT NULL
+		);
+		INSERT INTO fetch_stats (fetched_at, account_id) VALUES (1, 'acct-old');
+		INSERT INTO accounts (refresh_token_hash, account_uuid, created_at, updated_at) VALUES ('hash-old', 'acct-old', 1, 1);
+		INSERT INTO fetch_errors (occurred_at, account_id, error_type) VALUES (1, 'acct-old', 'http');
+		PRAGMA user_version = 1;
+	`)
+	if err != nil {
+		t.Fatalf("seed legacy schema: %v", err)
+	}
+
+	store, err := NewStatsStore()
+	if err != nil {
+		t.Fatalf("NewStatsStore() migration error: %v", err)
+	}
+	defer store.Close()
+
+	for _, query := range []string{
+		"SELECT provider FROM fetch_stats WHERE id=1",
+		"SELECT provider FROM accounts WHERE refresh_token_hash='hash-old'",
+		"SELECT provider FROM fetch_errors WHERE id=1",
+	} {
+		var provider string
+		if err := store.db.QueryRow(query).Scan(&provider); err != nil {
+			t.Fatalf("query %q failed: %v", query, err)
+		}
+		if provider != "claude" {
+			t.Fatalf("query %q returned provider %q, want claude", query, provider)
+		}
+	}
+
+	var version int
+	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("PRAGMA user_version failed: %v", err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion)
+	}
+}
+
+func TestSchemaVersion_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	version, err := schemaVersion(ctx, store.db)
+	if err != nil {
+		t.Fatalf("schemaVersion() error: %v", err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("schemaVersion() = %d, want %d", version, currentSchemaVersion)
+	}
+
+	tx, err := store.db.Begin()
+	if err != nil {
+		t.Fatalf("db.Begin() error: %v", err)
+	}
+	defer tx.Rollback()
+
+	if err := setSchemaVersion(ctx, tx, 1); err != nil {
+		t.Fatalf("setSchemaVersion() error: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit() error: %v", err)
+	}
+
+	version, err = schemaVersion(ctx, store.db)
+	if err != nil {
+		t.Fatalf("schemaVersion() after set error: %v", err)
+	}
+	if version != 1 {
+		t.Fatalf("schemaVersion() after set = %d, want 1", version)
+	}
+}
+
+func TestInitSchema_RejectsFutureVersion(t *testing.T) {
+	origPath := statsDBPath
+	statsDBPath = filepath.Join(t.TempDir(), "stats.db")
+	defer func() { statsDBPath = origPath }()
+
+	db, err := sql.Open("sqlite", statsDBPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", currentSchemaVersion+1)); err != nil {
+		t.Fatalf("seed future version: %v", err)
+	}
+
+	err = initSchema(context.Background(), db)
+	if err == nil {
+		t.Fatal("initSchema() error = nil, want rejection of future schema version")
+	}
+	if !strings.Contains(err.Error(), "unsupported stats schema version") {
+		t.Fatalf("initSchema() error = %v, want future-version rejection", err)
+	}
+}
+
+// TestNewStatsStore_ConcurrentMigration locks in the fix for the race
+// where two trays starting simultaneously on a fresh DB both try to apply
+// the (non-idempotent) v2 ALTER TABLE migrations and the loser fails with
+// "duplicate column". With BEGIN IMMEDIATE + locked re-check, both
+// concurrent NewStatsStore calls must succeed and the schema must end up
+// at currentSchemaVersion.
+func TestNewStatsStore_ConcurrentMigration(t *testing.T) {
+	origPath := statsDBPath
+	statsDBPath = filepath.Join(t.TempDir(), "stats.db")
+	defer func() { statsDBPath = origPath }()
+
+	const N = 4
+	var wg sync.WaitGroup
+	errs := make([]error, N)
+	stores := make([]*StatsStore, N)
+	start := make(chan struct{})
+
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-start // gate so all goroutines race together
+			s, err := NewStatsStore()
+			stores[idx] = s
+			errs[idx] = err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d NewStatsStore() error: %v", i, err)
+		}
+	}
+	for _, s := range stores {
+		if s != nil {
+			s.Close()
+		}
+	}
+	if t.Failed() {
+		return
+	}
+
+	// Open one more time and check the schema converged.
+	s, err := NewStatsStore()
+	if err != nil {
+		t.Fatalf("post-race NewStatsStore() error: %v", err)
+	}
+	defer s.Close()
+
+	version, err := schemaVersion(context.Background(), s.db)
+	if err != nil {
+		t.Fatalf("schemaVersion() error: %v", err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("schemaVersion() = %d, want %d", version, currentSchemaVersion)
+	}
+}
+
+func TestApplyMigration_RollsBackOnFailure(t *testing.T) {
+	ctx := context.Background()
+	origPath := statsDBPath
+	statsDBPath = filepath.Join(t.TempDir(), "stats.db")
+	defer func() { statsDBPath = origPath }()
+
+	db, err := sql.Open("sqlite", statsDBPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec("CREATE TABLE migration_test (id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatalf("create migration_test: %v", err)
+	}
+
+	err = applyMigration(ctx, db, schemaMigration{
+		version: 1,
+		name:    "failing migration",
+		up: func(ctx context.Context, exec sqlExecutor) error {
+			if _, err := exec.ExecContext(ctx, "ALTER TABLE migration_test ADD COLUMN note TEXT"); err != nil {
+				return err
+			}
+			return fmt.Errorf("boom")
+		},
+	})
+	if err == nil {
+		t.Fatal("applyMigration() error = nil, want failure")
+	}
+
+	var count int
+	row := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('migration_test') WHERE name = 'note'")
+	if err := row.Scan(&count); err != nil {
+		t.Fatalf("pragma_table_info scan error: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("migration_test.note column count = %d, want 0 after rollback", count)
+	}
+
+	version, err := schemaVersion(ctx, db)
+	if err != nil {
+		t.Fatalf("schemaVersion() error: %v", err)
+	}
+	if version != 0 {
+		t.Fatalf("schemaVersion() = %d, want 0 after failed migration", version)
 	}
 }

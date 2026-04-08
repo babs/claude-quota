@@ -33,7 +33,7 @@ func TestFetchProfile_Success(t *testing.T) {
 	defer func() { profileURL = origURL }()
 	profileURL = srv.URL
 
-	resolver := NewAccountResolver(srv.Client(), nil)
+	resolver := NewAccountResolver(ProviderClaude, srv.Client(), nil)
 	info, err := resolver.fetchProfile("test-token")
 	if err != nil {
 		t.Fatalf("fetchProfile() error: %v", err)
@@ -62,7 +62,7 @@ func TestFetchProfile_NonOK(t *testing.T) {
 	defer func() { profileURL = origURL }()
 	profileURL = srv.URL
 
-	resolver := NewAccountResolver(srv.Client(), nil)
+	resolver := NewAccountResolver(ProviderClaude, srv.Client(), nil)
 	_, err := resolver.fetchProfile("tok")
 	if err == nil {
 		t.Error("fetchProfile() should fail on non-200")
@@ -80,7 +80,7 @@ func TestFetchProfile_InvalidJSON(t *testing.T) {
 	defer func() { profileURL = origURL }()
 	profileURL = srv.URL
 
-	resolver := NewAccountResolver(srv.Client(), nil)
+	resolver := NewAccountResolver(ProviderClaude, srv.Client(), nil)
 	_, err := resolver.fetchProfile("tok")
 	if err == nil {
 		t.Error("fetchProfile() should fail on invalid JSON")
@@ -106,7 +106,7 @@ func TestResolve_NilStats_CallsAPI(t *testing.T) {
 	defer func() { profileURL = origURL }()
 	profileURL = srv.URL
 
-	r := NewAccountResolver(srv.Client(), nil)
+	r := NewAccountResolver(ProviderClaude, srv.Client(), nil)
 	info := r.Resolve(testSnap("token", "hash"))
 	if info.AccountUUID != "uuid-no-db" {
 		t.Errorf("AccountUUID = %q, want uuid-no-db", info.AccountUUID)
@@ -132,7 +132,7 @@ func TestResolve_NilStats_InMemoryCache(t *testing.T) {
 	defer func() { profileURL = origURL }()
 	profileURL = srv.URL
 
-	r := NewAccountResolver(srv.Client(), nil)
+	r := NewAccountResolver(ProviderClaude, srv.Client(), nil)
 	r.Resolve(testSnap("token", "hash"))
 	r.Resolve(testSnap("token", "hash"))
 	if c := calls.Load(); c != 1 {
@@ -153,7 +153,7 @@ func TestResolve_NilStats_InMemoryCacheInvalidation(t *testing.T) {
 	defer func() { profileURL = origURL }()
 	profileURL = srv.URL
 
-	r := NewAccountResolver(srv.Client(), nil)
+	r := NewAccountResolver(ProviderClaude, srv.Client(), nil)
 	info1 := r.Resolve(testSnap("tok1", "hash-1"))
 	info2 := r.Resolve(testSnap("tok2", "hash-2"))
 	if c := calls.Load(); c != 2 {
@@ -172,7 +172,7 @@ func TestResolve_EmptyHash(t *testing.T) {
 	store, _ := NewStatsStore()
 	defer store.Close()
 
-	r := NewAccountResolver(&http.Client{}, store)
+	r := NewAccountResolver(ProviderClaude, &http.Client{}, store)
 	info := r.Resolve(testSnap("token", ""))
 	if info.AccountUUID != "" {
 		t.Errorf("empty hash should return empty AccountInfo, got %+v", info)
@@ -188,7 +188,7 @@ func TestResolve_CacheHit(t *testing.T) {
 	defer store.Close()
 
 	// Pre-populate cache.
-	store.UpsertAccount("hash-123", AccountInfo{
+	store.UpsertAccount(ProviderClaude, "hash-123", AccountInfo{
 		AccountUUID:  "cached-uuid",
 		EmailAddress: "cached@example.com",
 	}, "", "")
@@ -204,7 +204,7 @@ func TestResolve_CacheHit(t *testing.T) {
 	defer func() { profileURL = origURL }()
 	profileURL = srv.URL
 
-	r := NewAccountResolver(srv.Client(), store)
+	r := NewAccountResolver(ProviderClaude, srv.Client(), store)
 	info := r.Resolve(testSnap("token", "hash-123"))
 	if info.AccountUUID != "cached-uuid" {
 		t.Errorf("AccountUUID = %q, want cached-uuid", info.AccountUUID)
@@ -229,7 +229,7 @@ func TestResolve_CacheMiss(t *testing.T) {
 	defer func() { profileURL = origURL }()
 	profileURL = srv.URL
 
-	r := NewAccountResolver(srv.Client(), store)
+	r := NewAccountResolver(ProviderClaude, srv.Client(), store)
 	info := r.Resolve(testSnap("token", "hash-new"))
 	if info.AccountUUID != "api-uuid" {
 		t.Errorf("AccountUUID = %q, want api-uuid", info.AccountUUID)
@@ -262,7 +262,7 @@ func TestResolve_APIErrorFallback(t *testing.T) {
 	defer func() { profileURL = origURL }()
 	profileURL = srv.URL
 
-	r := NewAccountResolver(srv.Client(), store)
+	r := NewAccountResolver(ProviderClaude, srv.Client(), store)
 	info := r.Resolve(testSnap("token", "hash-fallback"))
 	// Should fall back to using the hash as UUID.
 	if info.AccountUUID != "hash-fallback" {
@@ -288,7 +288,7 @@ func TestResolve_PassesSubscriptionInfo(t *testing.T) {
 	defer func() { profileURL = origURL }()
 	profileURL = srv.URL
 
-	r := NewAccountResolver(srv.Client(), store)
+	r := NewAccountResolver(ProviderClaude, srv.Client(), store)
 	snap := CredentialSnapshot{
 		AccessToken:      "tok",
 		RefreshTokenHash: "hash-sub",
@@ -311,5 +311,32 @@ func TestResolve_PassesSubscriptionInfo(t *testing.T) {
 	}
 	if !rateLimitTier.Valid || rateLimitTier.String != "tier4" {
 		t.Errorf("rate_limit_tier = %v, want tier4", rateLimitTier)
+	}
+}
+
+func TestResolve_CodexUsesAccountID(t *testing.T) {
+	origPath := statsDBPath
+	statsDBPath = filepath.Join(t.TempDir(), "stats.db")
+	defer func() { statsDBPath = origPath }()
+
+	store, _ := NewStatsStore()
+	defer store.Close()
+
+	r := NewAccountResolver(ProviderCodex, &http.Client{}, store)
+	info := r.Resolve(CredentialSnapshot{
+		AccountID:        "acct_789",
+		RefreshTokenHash: "hash-codex",
+		SubscriptionType: "chatgpt",
+	})
+	if info.AccountUUID != "acct_789" {
+		t.Fatalf("AccountUUID = %q, want acct_789", info.AccountUUID)
+	}
+
+	cached, ok := store.LookupAccount("hash-codex")
+	if !ok {
+		t.Fatal("expected Codex account to be cached")
+	}
+	if cached.AccountUUID != "acct_789" {
+		t.Fatalf("cached AccountUUID = %q, want acct_789", cached.AccountUUID)
 	}
 }

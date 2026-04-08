@@ -1,6 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -57,6 +62,9 @@ func TestApplyOverrides_EnvVars(t *testing.T) {
 	t.Setenv("CLAUDE_QUOTA_FONT_NAME", "bitmap")
 	t.Setenv("CLAUDE_QUOTA_HALO_SIZE", "2.5")
 	t.Setenv("CLAUDE_QUOTA_ICON_SIZE", "128")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK", "true")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK_SIZE", "16")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK_POSITION", "nw")
 
 	cfg := defaultConfig()
 	applyOverrides(&cfg, noOverrides)
@@ -75,6 +83,15 @@ func TestApplyOverrides_EnvVars(t *testing.T) {
 	if cfg.IconSize != 128 {
 		t.Errorf("IconSize = %d, want 128", cfg.IconSize)
 	}
+	if !cfg.ProviderMark {
+		t.Errorf("ProviderMark = %v, want true", cfg.ProviderMark)
+	}
+	if cfg.ProviderMarkSize != 16 {
+		t.Errorf("ProviderMarkSize = %f, want 16", cfg.ProviderMarkSize)
+	}
+	if cfg.ProviderMarkPosition != "NW" {
+		t.Errorf("ProviderMarkPosition = %q, want NW", cfg.ProviderMarkPosition)
+	}
 }
 
 func TestApplyOverrides_FlagOverridesEnv(t *testing.T) {
@@ -83,11 +100,15 @@ func TestApplyOverrides_FlagOverridesEnv(t *testing.T) {
 	t.Setenv("CLAUDE_QUOTA_FONT_NAME", "bitmap")
 	t.Setenv("CLAUDE_QUOTA_HALO_SIZE", "2.5")
 	t.Setenv("CLAUDE_QUOTA_ICON_SIZE", "128")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK", "false")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK_SIZE", "12")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK_POSITION", "nw")
 
 	cfg := defaultConfig()
 	applyOverrides(&cfg, overrides{
 		PollInterval: 60, FontSize: 24, FontName: "mono",
 		HaloSize: 0.5, IconSize: 256,
+		ProviderMark: boolPtr(true), ProviderMarkSize: 18, ProviderMarkPosition: "se",
 	})
 	if cfg.PollIntervalSeconds != 60 {
 		t.Errorf("PollIntervalSeconds = %d, want 60 (flag should override env)", cfg.PollIntervalSeconds)
@@ -104,6 +125,15 @@ func TestApplyOverrides_FlagOverridesEnv(t *testing.T) {
 	if cfg.IconSize != 256 {
 		t.Errorf("IconSize = %d, want 256 (flag should override env)", cfg.IconSize)
 	}
+	if !cfg.ProviderMark {
+		t.Errorf("ProviderMark = %v, want true (flag should override env)", cfg.ProviderMark)
+	}
+	if cfg.ProviderMarkSize != 18 {
+		t.Errorf("ProviderMarkSize = %f, want 18", cfg.ProviderMarkSize)
+	}
+	if cfg.ProviderMarkPosition != "SE" {
+		t.Errorf("ProviderMarkPosition = %q, want SE", cfg.ProviderMarkPosition)
+	}
 }
 
 func TestApplyOverrides_InvalidEnvIgnored(t *testing.T) {
@@ -112,6 +142,9 @@ func TestApplyOverrides_InvalidEnvIgnored(t *testing.T) {
 	t.Setenv("CLAUDE_QUOTA_FONT_NAME", "comic-sans")
 	t.Setenv("CLAUDE_QUOTA_HALO_SIZE", "-2")
 	t.Setenv("CLAUDE_QUOTA_ICON_SIZE", "-10")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK", "maybe")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK_SIZE", "-2")
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK_POSITION", "center")
 
 	cfg := defaultConfig()
 	applyOverrides(&cfg, noOverrides)
@@ -130,13 +163,54 @@ func TestApplyOverrides_InvalidEnvIgnored(t *testing.T) {
 	if cfg.IconSize != 64 {
 		t.Errorf("IconSize = %d, want 64 (invalid env should be ignored)", cfg.IconSize)
 	}
+	if cfg.ProviderMark {
+		t.Errorf("ProviderMark = %v, want false", cfg.ProviderMark)
+	}
+	if cfg.ProviderMarkSize != 14 {
+		t.Errorf("ProviderMarkSize = %f, want 14", cfg.ProviderMarkSize)
+	}
+	if cfg.ProviderMarkPosition != "SE" {
+		t.Errorf("ProviderMarkPosition = %q, want SE", cfg.ProviderMarkPosition)
+	}
 }
 
 func TestApplyOverrides_InvalidFlagIgnored(t *testing.T) {
 	cfg := defaultConfig()
-	applyOverrides(&cfg, overrides{FontName: "unknown-font", HaloSize: -1})
+	applyOverrides(&cfg, overrides{FontName: "unknown-font", HaloSize: -1, ProviderMarkPosition: "middle", ProviderMarkColor: "not-a-color"})
 	if cfg.FontName != "bold" {
 		t.Errorf("FontName = %q, want %q (invalid flag should be ignored)", cfg.FontName, "bold")
+	}
+	if cfg.ProviderMarkPosition != "SE" {
+		t.Errorf("ProviderMarkPosition = %q, want SE (invalid flag should be ignored)", cfg.ProviderMarkPosition)
+	}
+	if cfg.ProviderMarkColor != "" {
+		t.Errorf("ProviderMarkColor = %q, want empty (invalid flag should be ignored)", cfg.ProviderMarkColor)
+	}
+}
+
+func TestApplyOverrides_ProviderMarkColorFlag(t *testing.T) {
+	cfg := defaultConfig()
+	applyOverrides(&cfg, overrides{HaloSize: -1, ProviderMarkColor: "#DE7356"})
+	if cfg.ProviderMarkColor != "#DE7356" {
+		t.Errorf("ProviderMarkColor = %q, want #DE7356", cfg.ProviderMarkColor)
+	}
+}
+
+func TestApplyOverrides_ProviderMarkColorEnvVar(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK_COLOR", "#DE7356")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, noOverrides)
+	if cfg.ProviderMarkColor != "#DE7356" {
+		t.Errorf("ProviderMarkColor = %q, want #DE7356", cfg.ProviderMarkColor)
+	}
+}
+
+func TestApplyOverrides_ProviderMarkColorInvalidEnvIgnored(t *testing.T) {
+	t.Setenv("CLAUDE_QUOTA_PROVIDER_MARK_COLOR", "not-a-color")
+	cfg := defaultConfig()
+	applyOverrides(&cfg, noOverrides)
+	if cfg.ProviderMarkColor != "" {
+		t.Errorf("ProviderMarkColor = %q, want empty (invalid env should be ignored)", cfg.ProviderMarkColor)
 	}
 }
 
@@ -442,5 +516,126 @@ func TestConfigShowText_False(t *testing.T) {
 	cfg := Config{ShowText: boolPtr(false)}
 	if configShowText(cfg) != false {
 		t.Errorf("configShowText(false) = %v, want false", configShowText(cfg))
+	}
+}
+
+// Note: dedicated tests for the provider flag/env precedence chain live in
+// TestResolveProvider below, since applyOverrides no longer handles provider
+// resolution.
+
+// withIsolatedCredentials points the credential-path globals at files inside
+// t.TempDir(), optionally creating them, and restores the originals on
+// cleanup. Used to make resolveProvider's defaultProvider() fallback
+// deterministic without touching the host filesystem.
+func withIsolatedCredentials(t *testing.T, createClaude, createCodex bool) {
+	t.Helper()
+	origClaude := claudeCredentialsPath
+	origCodex := codexAuthPath
+	dir := t.TempDir()
+	claudeCredentialsPath = filepath.Join(dir, ".claude", ".credentials.json")
+	codexAuthPath = filepath.Join(dir, ".codex", "auth.json")
+	if createClaude {
+		if err := os.MkdirAll(filepath.Dir(claudeCredentialsPath), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(claudeCredentialsPath, []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if createCodex {
+		if err := os.MkdirAll(filepath.Dir(codexAuthPath), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(codexAuthPath, []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		claudeCredentialsPath = origClaude
+		codexAuthPath = origCodex
+	})
+}
+
+func TestResolveProvider(t *testing.T) {
+	cases := []struct {
+		name      string
+		flag      string
+		env       string
+		cfg       string
+		want      Provider
+		wantLog   string // substring; empty means no log expected
+		createCl  bool
+		createCdx bool
+	}{
+		{
+			name: "flag wins over env and config",
+			flag: "codex", env: "claude", cfg: "claude",
+			want: ProviderCodex,
+		},
+		{
+			name: "env wins over config when flag empty",
+			env:  "codex", cfg: "claude",
+			want: ProviderCodex,
+		},
+		{
+			name: "config used when flag and env empty",
+			cfg:  "codex",
+			want: ProviderCodex,
+		},
+		{
+			name:    "invalid flag falls through to env",
+			flag:    "bogus",
+			env:     "codex",
+			want:    ProviderCodex,
+			wantLog: `Ignoring invalid -provider="bogus"`,
+		},
+		{
+			name:    "invalid env falls through to config",
+			env:     "bogus",
+			cfg:     "claude",
+			want:    ProviderClaude,
+			wantLog: `Ignoring invalid CLAUDE_QUOTA_PROVIDER="bogus"`,
+		},
+		{
+			name:     "auto-detect fallback picks up claude creds",
+			createCl: true,
+			want:     ProviderClaude,
+			wantLog:  "Auto-detected provider",
+		},
+		{
+			name:      "auto-detect fallback picks up codex creds",
+			createCdx: true,
+			want:      ProviderCodex,
+			wantLog:   "Auto-detected provider",
+		},
+		{
+			// Locks in the invariant that defaultProvider() does NOT log
+			// "Auto-detected provider" in the neither-credentials branch
+			// (provider.go defaultProvider default case). If that branch
+			// ever starts logging, this test will flag it.
+			name: "auto-detect with no creds defaults to claude",
+			want: ProviderClaude,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withIsolatedCredentials(t, tc.createCl, tc.createCdx)
+			var buf bytes.Buffer
+			origOut := log.Writer()
+			log.SetOutput(&buf)
+			t.Cleanup(func() { log.SetOutput(origOut) })
+
+			got := resolveProvider(tc.flag, tc.env, tc.cfg)
+			if got != tc.want {
+				t.Errorf("resolveProvider(%q,%q,%q) = %q, want %q", tc.flag, tc.env, tc.cfg, got, tc.want)
+			}
+			if tc.wantLog == "" {
+				if buf.Len() > 0 {
+					t.Errorf("unexpected log output: %q", buf.String())
+				}
+			} else if !strings.Contains(buf.String(), tc.wantLog) {
+				t.Errorf("log %q does not contain %q", buf.String(), tc.wantLog)
+			}
+		})
 	}
 }

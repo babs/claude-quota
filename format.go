@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -88,4 +89,40 @@ func formatQuotaLine(label string, utilization *float64, resets *time.Time) stri
 		return fmt.Sprintf("%s: %.0f%% (resets in %s, %s)", label, *utilization, remaining, date)
 	}
 	return fmt.Sprintf("%s: %.0f%%", label, *utilization)
+}
+
+func formatDryRunSummary(provider Provider, credentialsPath string, state QuotaState) string {
+	var lines []string
+	lines = append(lines, fmt.Sprintf("Provider: %s", provider))
+	lines = append(lines, fmt.Sprintf("Credentials: %s", credentialsPath))
+
+	if state.Error != "" {
+		lines = append(lines, fmt.Sprintf("Error: %s", state.Error))
+		return strings.Join(lines, "\n")
+	}
+
+	lines = append(lines, formatQuotaLine("5h", state.FiveHour, state.FiveHourResets))
+	if line := formatProjectionLine(state.FiveHourProjected); line != "" {
+		lines = append(lines, strings.TrimSpace(line))
+	}
+	if line := formatSaturationLine(state.FiveHourSaturation); line != "" {
+		lines = append(lines, strings.TrimSpace(line))
+	}
+
+	lines = append(lines, formatQuotaLine("7d", state.SevenDay, state.SevenDayResets))
+	if line := formatProjectionLine(state.SevenDayProjected); line != "" {
+		lines = append(lines, strings.TrimSpace(line))
+	}
+	if line := formatSaturationLine(state.SevenDaySaturation); line != "" {
+		lines = append(lines, strings.TrimSpace(line))
+	}
+
+	if state.SevenDaySonnet != nil {
+		lines = append(lines, formatQuotaLine(extraQuotaLabel(state), state.SevenDaySonnet, state.SevenDaySonnetResets))
+	}
+	if state.LastUpdate != nil {
+		lines = append(lines, fmt.Sprintf("Updated: %s", state.LastUpdate.Local().Format(time.RFC3339)))
+	}
+
+	return strings.Join(lines, "\n")
 }
