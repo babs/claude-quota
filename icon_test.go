@@ -391,6 +391,115 @@ func TestRenderIcon_ProviderAccentDiffers(t *testing.T) {
 	}
 }
 
+func TestParseHexColor(t *testing.T) {
+	cases := []struct {
+		in   string
+		want color.RGBA
+		ok   bool
+	}{
+		// 6-char opaque (RRGGBB)
+		{"#DE7356", color.RGBA{0xDE, 0x73, 0x56, 0xFF}, true},
+		{"de7356", color.RGBA{0xDE, 0x73, 0x56, 0xFF}, true},
+		{"  #FFFFFF  ", color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}, true},
+		{"#000000", color.RGBA{0x00, 0x00, 0x00, 0xFF}, true},
+		// 3-char shorthand (RGB) — each nibble duplicated
+		{"#DE7", color.RGBA{0xDD, 0xEE, 0x77, 0xFF}, true},
+		{"de7", color.RGBA{0xDD, 0xEE, 0x77, 0xFF}, true},
+		{"#F00", color.RGBA{0xFF, 0x00, 0x00, 0xFF}, true},
+		{"#000", color.RGBA{0x00, 0x00, 0x00, 0xFF}, true},
+		{"#FFF", color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}, true},
+		// 8-char with alpha (RRGGBBAA)
+		{"#DE735680", color.RGBA{0xDE, 0x73, 0x56, 0x80}, true},
+		{"de735680", color.RGBA{0xDE, 0x73, 0x56, 0x80}, true},
+		{"#FFFFFFFF", color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}, true},
+		{"#00000001", color.RGBA{0x00, 0x00, 0x00, 0x01}, true},
+		// Rejected forms
+		{"", color.RGBA{}, false},
+		{"#FF", color.RGBA{}, false},      // 2 chars
+		{"#FFFF", color.RGBA{}, false},    // 4 chars
+		{"#FFFFF", color.RGBA{}, false},   // 5 chars
+		{"#FFFFFFF", color.RGBA{}, false}, // 7 chars
+		{"#GGGGGG", color.RGBA{}, false},
+		{"#ZZZ", color.RGBA{}, false},
+		{"#1234567", color.RGBA{}, false},
+		// Alpha 00 rejected: A==0 is the "no override" sentinel in renderIcon
+		{"#DE735600", color.RGBA{}, false},
+		{"#00000000", color.RGBA{}, false},
+	}
+	for _, tc := range cases {
+		got, err := parseHexColor(tc.in)
+		if tc.ok {
+			if err != nil {
+				t.Errorf("parseHexColor(%q) unexpected error: %v", tc.in, err)
+				continue
+			}
+			if got != tc.want {
+				t.Errorf("parseHexColor(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		} else if err == nil {
+			t.Errorf("parseHexColor(%q) expected error, got %v", tc.in, got)
+		}
+	}
+}
+
+func TestRenderIcon_ProviderMarkColorOverride(t *testing.T) {
+	v := 42.0
+	th := Thresholds{Warning: 60, Critical: 85}
+
+	def := testOpts()
+	def.ProviderMark = true
+
+	override := testOpts()
+	override.ProviderMark = true
+	override.ProviderMarkColor = color.RGBA{0xDE, 0x73, 0x56, 0xFF}
+
+	state := QuotaState{Provider: ProviderClaude, FiveHour: &v}
+	defData, _ := encodePNG(renderIcon(state, th, def))
+	overrideData, _ := encodePNG(renderIcon(state, th, override))
+	if string(defData) == string(overrideData) {
+		t.Fatal("provider_mark_color override should change the rendered icon")
+	}
+}
+
+func TestRenderIcon_ProviderMarkColorOverridesBarBorder(t *testing.T) {
+	v := 42.0
+	th := Thresholds{Warning: 60, Critical: 85}
+
+	base := testOpts()
+	base.Indicator = "bar"
+	base.ProviderMark = true
+
+	override := base
+	override.ProviderMarkColor = color.RGBA{0xDE, 0x73, 0x56, 0xFF}
+
+	state := QuotaState{Provider: ProviderClaude, FiveHour: &v}
+	baseData, _ := encodePNG(renderIcon(state, th, base))
+	overrideData, _ := encodePNG(renderIcon(state, th, override))
+	if string(baseData) == string(overrideData) {
+		t.Fatal("provider_mark_color override should change the bar border")
+	}
+}
+
+func TestRenderIcon_ProviderMarkColorOverridesBarProjBorder(t *testing.T) {
+	v := 42.0
+	proj := 70.0
+	th := Thresholds{Warning: 60, Critical: 85}
+
+	base := testOpts()
+	base.Indicator = "bar-proj"
+	base.ProviderMark = true
+
+	override := base
+	override.ProviderMarkColor = color.RGBA{0xDE, 0x73, 0x56, 0xFF}
+
+	state := QuotaState{Provider: ProviderClaude, FiveHour: &v, FiveHourProjected: &proj}
+	baseData, _ := encodePNG(renderIcon(state, th, base))
+	overrideData, _ := encodePNG(renderIcon(state, th, override))
+	if string(baseData) == string(overrideData) {
+		t.Fatal("provider_mark_color override should change the bar-proj border")
+	}
+}
+
 func TestRenderIcon_ProviderAccentDiffersInErrorState(t *testing.T) {
 	th := Thresholds{Warning: 60, Critical: 85}
 	opts := testOpts()

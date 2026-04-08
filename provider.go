@@ -56,8 +56,13 @@ func providerDisplayName(provider Provider) string {
 	}
 }
 
+// providerQuotaTitle returns the user-visible title for a tray instance,
+// matching the installer-emitted desktop file Name (`Agent Quota (Claude)` /
+// `Agent Quota (Codex)`). Used for the systray tooltip and the multi-line
+// tooltip header so the launcher entry, the systray icon hover, and the menu
+// header all read consistently.
 func providerQuotaTitle(provider Provider) string {
-	return providerDisplayName(provider) + " Quota"
+	return "Agent Quota (" + providerDisplayName(provider) + ")"
 }
 
 func loginCommand(provider Provider) string {

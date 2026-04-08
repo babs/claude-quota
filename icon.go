@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/png"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -54,6 +55,63 @@ func ValidProviderMarkPosition(pos string) bool {
 		return true
 	}
 	return false
+}
+
+// ValidHexColor reports whether s parses as a #RGB, #RRGGBB, or #RRGGBBAA
+// hex color.
+func ValidHexColor(s string) bool {
+	_, err := parseHexColor(s)
+	return err == nil
+}
+
+// parseHexColor parses a hex color string in one of three forms, with the
+// leading # optional:
+//
+//	#RGB       — 3-digit shorthand; each digit is duplicated (e.g. #DE7 → #DDEE77)
+//	#RRGGBB    — 6-digit opaque
+//	#RRGGBBAA  — 8-digit with explicit alpha
+//
+// Returns an opaque color.RGBA on success. A=0 (fully transparent) is
+// rejected explicitly: it doesn't make sense for a solid tray mark, and the
+// renderIcon pipeline uses A==0 as a sentinel for "no override set."
+func parseHexColor(s string) (color.RGBA, error) {
+	raw := strings.TrimPrefix(strings.TrimSpace(s), "#")
+	var r, g, b, a uint8
+	a = 0xFF
+	switch len(raw) {
+	case 3:
+		// #RGB — expand each nibble to a byte by duplicating it.
+		n, err := strconv.ParseUint(raw, 16, 16)
+		if err != nil {
+			return color.RGBA{}, fmt.Errorf("invalid hex color %q: %w", s, err)
+		}
+		r = uint8((n>>8)&0xF) * 0x11
+		g = uint8((n>>4)&0xF) * 0x11
+		b = uint8(n&0xF) * 0x11
+	case 6:
+		n, err := strconv.ParseUint(raw, 16, 32)
+		if err != nil {
+			return color.RGBA{}, fmt.Errorf("invalid hex color %q: %w", s, err)
+		}
+		r = uint8(n >> 16)
+		g = uint8(n >> 8)
+		b = uint8(n)
+	case 8:
+		n, err := strconv.ParseUint(raw, 16, 32)
+		if err != nil {
+			return color.RGBA{}, fmt.Errorf("invalid hex color %q: %w", s, err)
+		}
+		r = uint8(n >> 24)
+		g = uint8(n >> 16)
+		b = uint8(n >> 8)
+		a = uint8(n)
+		if a == 0 {
+			return color.RGBA{}, fmt.Errorf("invalid hex color %q: fully transparent (alpha 00) is not supported", s)
+		}
+	default:
+		return color.RGBA{}, fmt.Errorf("invalid hex color %q: expected #RGB, #RRGGBB, or #RRGGBBAA", s)
+	}
+	return color.RGBA{R: r, G: g, B: b, A: a}, nil
 }
 
 // TTF font cache: parsed once per font name, faces cached per size.
@@ -146,6 +204,11 @@ type RenderOptions struct {
 	ProviderMark         bool
 	ProviderMarkSize     float64
 	ProviderMarkPosition string
+	// ProviderMarkColor overrides the provider accent color when its alpha
+	// is non-zero. Affects the provider mark dot and the bar / bar-proj
+	// borders (which use the accent when ProviderMark is enabled). The pie
+	// outer ring deliberately keeps tracking utilization regardless.
+	ProviderMarkColor color.RGBA
 }
 
 // drawParams holds shared, pre-scaled rendering parameters for internal draw functions.
@@ -184,6 +247,9 @@ func renderIcon(state QuotaState, thresholds Thresholds, opts RenderOptions) ima
 	}
 
 	accent := providerAccentColor(state.Provider)
+	if opts.ProviderMarkColor.A != 0 {
+		accent = opts.ProviderMarkColor
+	}
 	if state.TokenExpired {
 		drawExpiredIcon(dc, p)
 	} else if state.Error != "" {
@@ -195,7 +261,7 @@ func renderIcon(state QuotaState, thresholds Thresholds, opts RenderOptions) ima
 		}
 		switch opts.Indicator {
 		case "bar":
-			drawBarIcon(dc, utilization, col, p)
+			drawBarIcon(dc, utilization, col, borderCol, p)
 		case "bar-proj":
 			var projected *float64
 			var projCol color.RGBA
@@ -297,12 +363,12 @@ func drawNormalIcon(dc *gg.Context, utilization *float64, col color.RGBA, p draw
 }
 
 // drawBarIcon draws a vertical filling bar indicator (bottom to top).
-func drawBarIcon(dc *gg.Context, utilization *float64, col color.RGBA, p drawParams) {
+func drawBarIcon(dc *gg.Context, utilization *float64, col, borderCol color.RGBA, p drawParams) {
 	border := 2 * p.s
 	size := float64(p.iconSize)
 
 	// Border rectangle
-	dc.SetColor(col)
+	dc.SetColor(borderCol)
 	dc.SetLineWidth(border)
 	dc.DrawRectangle(border/2, border/2, size-border, size-border)
 	dc.Stroke()

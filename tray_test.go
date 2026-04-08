@@ -9,8 +9,8 @@ import (
 func TestBuildTooltip_Empty(t *testing.T) {
 	state := QuotaState{}
 	got := buildTooltip(state, ProviderClaude)
-	if got != "Claude Quota" {
-		t.Errorf("buildTooltip(empty) = %q, want %q", got, "Claude Quota")
+	if got != "Agent Quota (Claude)" {
+		t.Errorf("buildTooltip(empty) = %q, want %q", got, "Agent Quota (Claude)")
 	}
 }
 
@@ -154,7 +154,7 @@ func TestBuildTooltip_CodexUsesProviderTitle(t *testing.T) {
 		SevenDay: &v5,
 	}
 	got := buildTooltip(state, ProviderCodex)
-	if !strings.HasPrefix(got, "Codex Quota") {
+	if !strings.HasPrefix(got, "Agent Quota (Codex)") {
 		t.Fatalf("buildTooltip() = %q, want Codex title", got)
 	}
 }

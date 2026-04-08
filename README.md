@@ -150,6 +150,7 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
 | Provider mark           | `provider_mark`         | `CLAUDE_QUOTA_PROVIDER_MARK`      | `-provider-mark`      | `false`  |
 | Provider mark size      | `provider_mark_size`    | `CLAUDE_QUOTA_PROVIDER_MARK_SIZE` | `-provider-mark-size` | `14`     |
 | Provider mark position  | `provider_mark_position`| `CLAUDE_QUOTA_PROVIDER_MARK_POSITION` | `-provider-mark-position` | `"SE"` |
+| Provider mark color     | `provider_mark_color`   | `CLAUDE_QUOTA_PROVIDER_MARK_COLOR` | `-provider-mark-color` | provider default (`#RGB`, `#RRGGBB`, or `#RRGGBBAA`) |
 | Show account in menu    | `show_account`          | `CLAUDE_QUOTA_SHOW_ACCOUNT`       | `-show-account`       | `false`  |
 | Local stats collection  | `stats`                 | `CLAUDE_QUOTA_STATS`              | `-stats`              | `false`  |
 | Warning threshold (%)   | `thresholds.warning`    | `CLAUDE_QUOTA_WARNING_THRESHOLD`  | `-warning-threshold`  | `60`     |

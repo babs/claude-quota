@@ -99,6 +99,34 @@ func TestLoadConfig_PartialFile(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_ValidProviderMarkColor(t *testing.T) {
+	orig := configPath
+	defer func() { configPath = orig }()
+
+	dir := t.TempDir()
+	configPath = filepath.Join(dir, "config.json")
+	os.WriteFile(configPath, []byte(`{"provider_mark_color":"#DE7356"}`), 0600)
+
+	cfg := loadConfig()
+	if cfg.ProviderMarkColor != "#DE7356" {
+		t.Errorf("ProviderMarkColor = %q, want #DE7356", cfg.ProviderMarkColor)
+	}
+}
+
+func TestLoadConfig_InvalidProviderMarkColorReset(t *testing.T) {
+	orig := configPath
+	defer func() { configPath = orig }()
+
+	dir := t.TempDir()
+	configPath = filepath.Join(dir, "config.json")
+	os.WriteFile(configPath, []byte(`{"provider_mark_color":"not-a-color"}`), 0600)
+
+	cfg := loadConfig()
+	if cfg.ProviderMarkColor != "" {
+		t.Errorf("ProviderMarkColor = %q, want empty (invalid hex should be reset)", cfg.ProviderMarkColor)
+	}
+}
+
 func TestLoadConfig_InvalidJSON(t *testing.T) {
 	orig := configPath
 	defer func() { configPath = orig }()

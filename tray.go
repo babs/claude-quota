@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"log"
 	"net/http"
 	"sync"
@@ -34,6 +35,11 @@ type App struct {
 	fetchMu          sync.Mutex    // serializes refreshAccount+Fetch+record across goroutines
 	uiMu             sync.Mutex    // serializes updateUI calls
 
+	// Parsed once at construction from config.ProviderMarkColor to avoid
+	// re-parsing the hex string on every render tick. A.A == 0 means "no
+	// override" (parseHexColor always returns A = 255 on success).
+	providerMarkColor color.RGBA
+
 	// Update state.
 	updateMu      sync.Mutex
 	updateVersion string // latest version when an update is available
@@ -59,7 +65,7 @@ type App struct {
 
 // NewApp creates an App from the given config and credentials.
 func NewApp(cfg Config, creds *OAuthCredentials, client *http.Client, stats *StatsStore, resolver *AccountResolver) *App {
-	return &App{
+	a := &App{
 		config:   cfg,
 		creds:    creds,
 		quota:    NewQuotaClient(creds, client),
@@ -67,6 +73,14 @@ func NewApp(cfg Config, creds *OAuthCredentials, client *http.Client, stats *Sta
 		resolver: resolver,
 		quit:     make(chan struct{}),
 	}
+	// Config load already validated this via parseHexColor; a.A stays 0 when
+	// no override is set, which renderIcon treats as "use the default accent".
+	if cfg.ProviderMarkColor != "" {
+		if c, err := parseHexColor(cfg.ProviderMarkColor); err == nil {
+			a.providerMarkColor = c
+		}
+	}
+	return a
 }
 
 // Run starts the systray. Blocks until the tray exits.
@@ -296,6 +310,7 @@ func (a *App) updateUI() {
 		ProviderMark:         a.config.ProviderMark,
 		ProviderMarkSize:     a.config.ProviderMarkSize,
 		ProviderMarkPosition: a.config.ProviderMarkPosition,
+		ProviderMarkColor:    a.providerMarkColor,
 	})
 	iconData, err := iconToBytes(img)
 	if err != nil {

@@ -24,6 +24,7 @@ type Config struct {
 	ProviderMark         bool       `json:"provider_mark"`
 	ProviderMarkSize     float64    `json:"provider_mark_size"`
 	ProviderMarkPosition string     `json:"provider_mark_position"`
+	ProviderMarkColor    string     `json:"provider_mark_color,omitempty"`
 	ShowAccount          bool       `json:"show_account"`
 	Stats                bool       `json:"stats"`
 	Thresholds           Thresholds `json:"thresholds"`
@@ -151,6 +152,12 @@ func loadConfigWithMode(createDefault bool) Config {
 		cfg.ProviderMarkPosition = defaults.ProviderMarkPosition
 	} else {
 		cfg.ProviderMarkPosition = strings.ToUpper(cfg.ProviderMarkPosition)
+	}
+	if cfg.ProviderMarkColor != "" {
+		if _, err := parseHexColor(cfg.ProviderMarkColor); err != nil {
+			log.Printf("Invalid provider_mark_color in config: %v, ignoring", err)
+			cfg.ProviderMarkColor = ""
+		}
 	}
 	if cfg.Provider != "" {
 		if !ValidProviderName(cfg.Provider) {
