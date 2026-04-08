@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -233,6 +234,9 @@ func (oc *OAuthCredentials) RateLimitTier() string {
 	return oc.rateLimitTier
 }
 
+// jwtExpiryMillis extracts the "exp" claim from a JWT without signature
+// verification. This is intentional: we only need a rough expiry check to
+// decide when to reload credentials from disk — worst case is an extra read.
 func jwtExpiryMillis(token string) int64 {
 	parts := strings.Split(token, ".")
 	if len(parts) < 2 {
@@ -250,7 +254,7 @@ func jwtExpiryMillis(token string) int64 {
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return 0
 	}
-	if claims.Exp == 0 {
+	if claims.Exp <= 0 || claims.Exp > math.MaxInt64/1000 {
 		return 0
 	}
 	return claims.Exp * 1000

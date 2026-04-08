@@ -419,3 +419,48 @@ func TestReloadAndSnapshot_CodexIncludesAccountID(t *testing.T) {
 		t.Fatal("RefreshTokenHash should not be empty for Codex refresh token")
 	}
 }
+
+func TestJwtExpiryMillis_ValidToken(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"exp":1700000000}`))
+	token := "header." + payload + ".sig"
+	got := jwtExpiryMillis(token)
+	if got != 1700000000*1000 {
+		t.Fatalf("jwtExpiryMillis = %d, want %d", got, 1700000000*1000)
+	}
+}
+
+func TestJwtExpiryMillis_NoExp(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user"}`))
+	token := "header." + payload + ".sig"
+	if got := jwtExpiryMillis(token); got != 0 {
+		t.Fatalf("jwtExpiryMillis(no exp) = %d, want 0", got)
+	}
+}
+
+func TestJwtExpiryMillis_NoDots(t *testing.T) {
+	if got := jwtExpiryMillis("nodots"); got != 0 {
+		t.Fatalf("jwtExpiryMillis(nodots) = %d, want 0", got)
+	}
+}
+
+func TestJwtExpiryMillis_InvalidBase64(t *testing.T) {
+	if got := jwtExpiryMillis("h.!!!invalid!!!.s"); got != 0 {
+		t.Fatalf("jwtExpiryMillis(bad base64) = %d, want 0", got)
+	}
+}
+
+func TestJwtExpiryMillis_InvalidJSON(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{bad json}`))
+	token := "h." + payload + ".s"
+	if got := jwtExpiryMillis(token); got != 0 {
+		t.Fatalf("jwtExpiryMillis(bad json) = %d, want 0", got)
+	}
+}
+
+func TestJwtExpiryMillis_OverflowGuard(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"exp":9223372036854775807}`))
+	token := "h." + payload + ".s"
+	if got := jwtExpiryMillis(token); got != 0 {
+		t.Fatalf("jwtExpiryMillis(overflow) = %d, want 0", got)
+	}
+}

@@ -21,10 +21,16 @@ func credentialsPreCheck(provider Provider, path string) {
 		fmt.Printf("%s credentials not found.\n", providerDisplayName(provider))
 		fmt.Printf("Expected: %s\n", path)
 		fmt.Printf("\nRun '%s' to authenticate %s first.\n", loginCommand(provider), providerDisplayName(provider))
-		if runtime.GOOS == "windows" && provider == ProviderClaude {
-			fmt.Println("\nIf Claude Code is installed in WSL, use -claude-home to point to")
-			fmt.Println(`the WSL home directory, e.g.:`)
-			fmt.Println(`  claude-quota -claude-home \\wsl$\<distro>\home\<username>`)
+		if runtime.GOOS == "windows" {
+			if provider == ProviderClaude {
+				fmt.Println("\nIf Claude Code is installed in WSL, use -claude-home to point to")
+				fmt.Println(`the WSL home directory, e.g.:`)
+				fmt.Println(`  claude-quota -claude-home \\wsl$\<distro>\home\<username>`)
+			} else if provider == ProviderCodex {
+				fmt.Println("\nIf Codex is installed in WSL, use -codex-home to point to")
+				fmt.Println(`the WSL home directory, e.g.:`)
+				fmt.Println(`  claude-quota -provider codex -codex-home \\wsl$\<distro>\home\<username>`)
+			}
 			fmt.Println(`Run "wsl -l -q" to list available WSL distributions.`)
 			fmt.Print("\nPress enter to continue...")
 			bufio.NewReader(os.Stdin).ReadBytes('\n')

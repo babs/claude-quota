@@ -231,7 +231,7 @@ func main() {
 
 	app.Run()
 
-	if app.restartRequested {
+	if app.restartRequested.Load() {
 		execSelf()
 	}
 }

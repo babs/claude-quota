@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/systray"
@@ -29,7 +30,7 @@ type App struct {
 	resolver         *AccountResolver
 	account          AccountInfo
 	quit             chan struct{} // closed on shutdown
-	restartRequested bool          // set before shutdown to trigger re-exec
+	restartRequested atomic.Bool   // set before shutdown to trigger re-exec
 	fetchMu          sync.Mutex    // serializes refreshAccount+Fetch+record across goroutines
 	uiMu             sync.Mutex    // serializes updateUI calls
 
@@ -217,6 +218,10 @@ func (a *App) fetchCycle() {
 
 	a.refreshAccount()
 	if a.quota.Fetch() {
+		// Codex email comes from the usage API, not a separate profile endpoint.
+		if state := a.quota.State(); state.AccountEmail != "" {
+			a.account.EmailAddress = state.AccountEmail
+		}
 		a.recordStats()
 	} else {
 		a.recordError()
@@ -319,7 +324,6 @@ func (a *App) updateUI() {
 			a.mAccountOrg.Hide()
 		}
 	}
-	a.mProvider.SetTitle(fmt.Sprintf("Provider: %s", providerDisplayName(state.Provider)))
 	if a.mProvider != nil {
 		a.mProvider.SetTitle(fmt.Sprintf("Provider: %s", providerDisplayName(state.Provider)))
 	}
@@ -379,7 +383,7 @@ func (a *App) handleUpdateClick() {
 	case updatePhaseApplied:
 		a.mCheckUpdate.SetTitle("Restarting...")
 		a.mCheckUpdate.Disable()
-		a.restartRequested = true
+		a.restartRequested.Store(true)
 		a.Shutdown()
 	}
 }

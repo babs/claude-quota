@@ -125,6 +125,27 @@ func TestBuildTooltip_ErrorHidesQuota(t *testing.T) {
 	}
 }
 
+func TestExtraQuotaLabel_CustomLabel(t *testing.T) {
+	state := QuotaState{Provider: ProviderCodex, SevenDaySonnetLabel: "Code review"}
+	if got := extraQuotaLabel(state); got != "Code review" {
+		t.Fatalf("extraQuotaLabel = %q, want 'Code review'", got)
+	}
+}
+
+func TestExtraQuotaLabel_CodexDefault(t *testing.T) {
+	state := QuotaState{Provider: ProviderCodex}
+	if got := extraQuotaLabel(state); got != "Additional" {
+		t.Fatalf("extraQuotaLabel(codex, no label) = %q, want 'Additional'", got)
+	}
+}
+
+func TestExtraQuotaLabel_ClaudeDefault(t *testing.T) {
+	state := QuotaState{Provider: ProviderClaude}
+	if got := extraQuotaLabel(state); got != "Sonnet 7d" {
+		t.Fatalf("extraQuotaLabel(claude) = %q, want 'Sonnet 7d'", got)
+	}
+}
+
 func TestBuildTooltip_CodexUsesProviderTitle(t *testing.T) {
 	v5 := 12.0
 	state := QuotaState{

@@ -450,6 +450,9 @@ func TestFetch_CodexSuccess(t *testing.T) {
 	if state.SevenDayResets == nil || state.SevenDayResets.Unix() != 4103049600 {
 		t.Fatalf("SevenDayResets = %v, want unix 4103049600", state.SevenDayResets)
 	}
+	if state.AccountEmail != "user@example.com" {
+		t.Fatalf("AccountEmail = %q, want user@example.com", state.AccountEmail)
+	}
 }
 
 func TestFetch_ResetsStaleState(t *testing.T) {
@@ -739,5 +742,153 @@ func TestFetch_ComputesSevenDaySaturation(t *testing.T) {
 	untilSat := time.Until(*state.SevenDaySaturation)
 	if untilSat < 5*time.Hour || untilSat > 7*time.Hour {
 		t.Errorf("SevenDaySaturation in %v, want ~6h", untilSat)
+	}
+}
+
+func TestBuildCodexState_CodeReviewRateLimit(t *testing.T) {
+	pct := 42.0
+	primaryPct := 10.0
+	resetAt := int64(4102444800)
+	windowSec := 604800
+	primaryWindowSec := 18000
+	data := codexUsageResponse{
+		RateLimit: &codexRateLimit{
+			PrimaryWindow: &codexWindow{
+				UsedPercent:        &primaryPct,
+				ResetAt:            &resetAt,
+				LimitWindowSeconds: &primaryWindowSec,
+			},
+		},
+		CodeReviewRateLimit: &codexRateLimit{
+			SecondaryWindow: &codexWindow{
+				UsedPercent:        &pct,
+				ResetAt:            &resetAt,
+				LimitWindowSeconds: &windowSec,
+			},
+		},
+	}
+
+	state := buildCodexState(data)
+	if state.SevenDaySonnet == nil || *state.SevenDaySonnet != 42 {
+		t.Fatalf("SevenDaySonnet = %v, want 42", state.SevenDaySonnet)
+	}
+	if state.SevenDaySonnetLabel != "Code review" {
+		t.Fatalf("SevenDaySonnetLabel = %q, want 'Code review'", state.SevenDaySonnetLabel)
+	}
+}
+
+func TestBuildCodexState_AdditionalLimitsWithTitle(t *testing.T) {
+	pct := 55.0
+	resetAt := int64(4102444800)
+	data := codexUsageResponse{
+		AdditionalLimits: []codexNamedRateInfo{
+			{
+				Title: "Image gen",
+				Name:  "image_gen",
+				Window: &codexWindow{
+					UsedPercent: &pct,
+					ResetAt:     &resetAt,
+				},
+			},
+		},
+	}
+
+	state := buildCodexState(data)
+	if state.SevenDaySonnet == nil || *state.SevenDaySonnet != 55 {
+		t.Fatalf("SevenDaySonnet = %v, want 55", state.SevenDaySonnet)
+	}
+	if state.SevenDaySonnetLabel != "Image gen" {
+		t.Fatalf("SevenDaySonnetLabel = %q, want 'Image gen'", state.SevenDaySonnetLabel)
+	}
+}
+
+func TestBuildCodexState_AdditionalLimitsNameFallback(t *testing.T) {
+	pct := 20.0
+	data := codexUsageResponse{
+		AdditionalLimits: []codexNamedRateInfo{
+			{
+				Name: "extra_limit",
+				PrimaryWindow: &codexWindow{
+					UsedPercent: &pct,
+				},
+			},
+		},
+	}
+
+	state := buildCodexState(data)
+	if state.SevenDaySonnet == nil || *state.SevenDaySonnet != 20 {
+		t.Fatalf("SevenDaySonnet = %v, want 20", state.SevenDaySonnet)
+	}
+	if state.SevenDaySonnetLabel != "extra_limit" {
+		t.Fatalf("SevenDaySonnetLabel = %q, want 'extra_limit'", state.SevenDaySonnetLabel)
+	}
+}
+
+func TestBuildCodexState_NilRateLimit(t *testing.T) {
+	data := codexUsageResponse{}
+	state := buildCodexState(data)
+	if state.FiveHour != nil {
+		t.Fatalf("FiveHour = %v, want nil", state.FiveHour)
+	}
+	if state.SevenDay != nil {
+		t.Fatalf("SevenDay = %v, want nil", state.SevenDay)
+	}
+}
+
+func TestParseCodexWindow_NilWindow(t *testing.T) {
+	var util *float64
+	var resets *time.Time
+	dur := parseCodexWindow(nil, &util, &resets, 5*time.Hour)
+	if dur != 0 {
+		t.Fatalf("parseCodexWindow(nil) = %v, want 0", dur)
+	}
+	if util != nil {
+		t.Fatal("util should remain nil")
+	}
+}
+
+func TestParseCodexWindow_NoWindowSeconds(t *testing.T) {
+	pct := 10.0
+	window := &codexWindow{UsedPercent: &pct}
+	var util *float64
+	var resets *time.Time
+	dur := parseCodexWindow(window, &util, &resets, 5*time.Hour)
+	if dur != 5*time.Hour {
+		t.Fatalf("parseCodexWindow fallback = %v, want 5h", dur)
+	}
+	if util == nil || *util != 10 {
+		t.Fatalf("util = %v, want 10", util)
+	}
+}
+
+func TestBuildCodexState_PopulatesAccountEmail(t *testing.T) {
+	pct := 10.0
+	data := codexUsageResponse{
+		Email: "user@example.com",
+		RateLimit: &codexRateLimit{
+			PrimaryWindow: &codexWindow{UsedPercent: &pct},
+		},
+	}
+	state := buildCodexState(data)
+	if state.AccountEmail != "user@example.com" {
+		t.Fatalf("AccountEmail = %q, want user@example.com", state.AccountEmail)
+	}
+}
+
+func TestSetErrorTyped_IncludesProvider(t *testing.T) {
+	creds := &OAuthCredentials{
+		provider:    ProviderCodex,
+		accessToken: "tok",
+		expiresAt:   time.Now().UnixMilli() + 300_000,
+	}
+	qc := NewQuotaClient(creds, &http.Client{})
+	qc.setErrorTyped("boom", ErrTypeNetwork, 0)
+
+	state := qc.State()
+	if state.Provider != ProviderCodex {
+		t.Fatalf("Provider = %q, want codex", state.Provider)
+	}
+	if state.Error != "boom" {
+		t.Fatalf("Error = %q, want boom", state.Error)
 	}
 }

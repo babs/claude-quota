@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,16 +71,21 @@ func defaultProvider() Provider {
 	claudeInfo, claudeOK := fileInfo(claudeCredentialsPath)
 	codexInfo, codexOK := fileInfo(codexAuthPath)
 
+	var p Provider
 	switch {
 	case claudeOK && codexOK:
-		return newerProvider(claudeInfo.ModTime(), codexInfo.ModTime())
+		p = newerProvider(claudeInfo.ModTime(), codexInfo.ModTime())
+		log.Printf("Auto-detected provider %q (both credential files exist, picked most recently modified)", p)
 	case claudeOK:
-		return ProviderClaude
+		p = ProviderClaude
+		log.Printf("Auto-detected provider %q (found Claude credentials only)", p)
 	case codexOK:
-		return ProviderCodex
+		p = ProviderCodex
+		log.Printf("Auto-detected provider %q (found Codex credentials only)", p)
 	default:
-		return ProviderClaude
+		p = ProviderClaude
 	}
+	return p
 }
 
 func fileExists(path string) bool {

@@ -12,6 +12,8 @@ import (
 )
 
 var usageURL = "https://api.anthropic.com/api/oauth/usage"
+
+// Undocumented internal endpoint used by the Codex CLI TUI rate-limit poller.
 var codexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
 
 // userAgent is the User-Agent header sent to the Anthropic API.
@@ -40,6 +42,7 @@ type QuotaState struct {
 	SevenDaySonnet       *float64
 	SevenDaySonnetResets *time.Time
 	SevenDaySonnetLabel  string
+	AccountEmail         string // populated from Codex usage response
 	LastUpdate           *time.Time
 	Error                string
 	ErrorType            string // credential, http, network, parse
@@ -227,7 +230,7 @@ func buildClaudeState(data usageResponse) QuotaState {
 }
 
 func buildCodexState(data codexUsageResponse) QuotaState {
-	newState := QuotaState{Provider: ProviderCodex}
+	newState := QuotaState{Provider: ProviderCodex, AccountEmail: data.Email}
 
 	var fiveHourWindowDuration = fiveHourWindow
 	var sevenDayWindowDuration = sevenDayWindow
@@ -285,7 +288,12 @@ func populateWindowForecasts(state *QuotaState, now time.Time, fiveWindow, seven
 // setErrorTyped resets state to an error-only snapshot with classification.
 func (qc *QuotaClient) setErrorTyped(msg, errType string, httpStatus int) {
 	qc.mu.Lock()
-	qc.state = QuotaState{Error: msg, ErrorType: errType, HTTPStatus: httpStatus}
+	qc.state = QuotaState{
+		Provider:   qc.creds.Provider(),
+		Error:      msg,
+		ErrorType:  errType,
+		HTTPStatus: httpStatus,
+	}
 	qc.mu.Unlock()
 }
 

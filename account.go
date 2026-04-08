@@ -60,7 +60,7 @@ func (r *AccountResolver) Resolve(snap CredentialSnapshot) AccountInfo {
 		if info.AccountUUID == "" {
 			info.AccountUUID = snap.RefreshTokenHash
 		}
-		if snap.RefreshTokenHash != "" {
+		if r.stats != nil && snap.RefreshTokenHash != "" {
 			r.stats.UpsertAccount(r.provider, snap.RefreshTokenHash, info, snap.SubscriptionType, snap.RateLimitTier)
 		}
 		return info
@@ -100,6 +100,8 @@ func (r *AccountResolver) resolveInMemory(snap CredentialSnapshot) AccountInfo {
 	r.mu.Unlock()
 
 	// Fetch outside the lock to avoid holding it during HTTP I/O.
+	// TOCTOU: concurrent calls with different hashes may both fetch;
+	// this only causes a redundant API call, not a correctness issue.
 	info, err := r.fetchProfile(snap.AccessToken)
 	if err != nil {
 		log.Printf("Profile API error: %v — using hash as account ID", err)

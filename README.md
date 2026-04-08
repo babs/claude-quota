@@ -91,6 +91,7 @@ For a release build with version info and cross-compilation:
 
 ```bash
 ./claude-quota                  # start the systray widget
+./claude-quota -dry-run         # fetch quota once, print results, and exit
 ./claude-quota -version         # show version info
 ./claude-quota -update          # self-update to latest release
 ./claude-quota -provider codex  # use Codex quotas from ~/.codex/auth.json
@@ -122,7 +123,6 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
   "icon_size": 64,
   "indicator": "pie",
   "show_text": true,
-  "show_account": false,
   "provider_mark": false,
   "provider_mark_size": 14,
   "provider_mark_position": "SE",
@@ -137,6 +137,7 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
 | Setting                 | Config key              | Env var                           | CLI flag              | Default  |
 | ----------------------- | ----------------------- | --------------------------------- | --------------------- | -------- |
 | Provider                | `provider`              | `CLAUDE_QUOTA_PROVIDER`           | `-provider`           | auto-detect by newest credentials file |
+| Dry-run mode            | n/a                     | n/a                               | `-dry-run`            | `false`   |
 | Claude home dir         | `claude_home`           | `CLAUDE_QUOTA_CLAUDE_HOME`        | `-claude-home`        | `~`      |
 | Codex home dir          | `codex_home`            | `CLAUDE_QUOTA_CODEX_HOME`         | `-codex-home`         | `~`      |
 | Poll interval (seconds) | `poll_interval_seconds` | `CLAUDE_QUOTA_POLL_INTERVAL`      | `-poll-interval`      | `300`    |

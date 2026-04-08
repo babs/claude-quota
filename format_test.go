@@ -182,3 +182,50 @@ func TestFormatDryRunSummary(t *testing.T) {
 		t.Fatalf("missing updated line: %q", got)
 	}
 }
+
+func TestFormatDryRunSummary_Error(t *testing.T) {
+	state := QuotaState{
+		Error: "token expired",
+	}
+	got := formatDryRunSummary(ProviderClaude, "/tmp/creds.json", state)
+	if !strings.Contains(got, "Error: token expired") {
+		t.Fatalf("missing error line: %q", got)
+	}
+	if strings.Contains(got, "5h:") {
+		t.Fatalf("error summary should not contain quota lines: %q", got)
+	}
+}
+
+func TestFormatDryRunSummary_WithProjectionAndSonnet(t *testing.T) {
+	v5 := 80.0
+	v7 := 30.0
+	proj := 120.0
+	sonnet := 15.0
+	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+	reset := now.Add(1 * time.Hour)
+	sat := now.Add(30 * time.Minute)
+	state := QuotaState{
+		Provider:           ProviderClaude,
+		FiveHour:           &v5,
+		FiveHourResets:     &reset,
+		FiveHourProjected:  &proj,
+		FiveHourSaturation: &sat,
+		SevenDay:           &v7,
+		SevenDaySonnet:     &sonnet,
+		LastUpdate:         &now,
+	}
+
+	got := formatDryRunSummary(ProviderClaude, "/tmp/creds.json", state)
+	if !strings.Contains(got, "5h: 80%") {
+		t.Fatalf("missing 5h line: %q", got)
+	}
+	if !strings.Contains(got, "projected ~120% at reset") {
+		t.Fatalf("missing projection line: %q", got)
+	}
+	if !strings.Contains(got, "saturates") {
+		t.Fatalf("missing saturation line: %q", got)
+	}
+	if !strings.Contains(got, "Sonnet 7d: 15%") {
+		t.Fatalf("missing sonnet line: %q", got)
+	}
+}

@@ -162,6 +162,7 @@ func migrateSchema(db *sql.DB) error {
 }
 
 func columnExists(db *sql.DB, table, column string) (bool, error) {
+	// Safety: table names come from hardcoded migration literals, not user input.
 	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
 		return false, fmt.Errorf("schema info for %s: %w", table, err)

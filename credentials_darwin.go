@@ -22,6 +22,7 @@ var loadKeychainFn = loadFromKeychain
 // load tries to read credentials from the macOS Keychain first.
 // If the Keychain lookup fails for any reason, it falls back to the JSON file.
 func (oc *OAuthCredentials) load() error {
+	// TODO: if Codex ever stores credentials in the macOS Keychain, add support here.
 	if oc.provider == ProviderCodex {
 		return oc.loadFromFile()
 	}
