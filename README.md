@@ -38,10 +38,12 @@ Download the latest binary for your platform from
 
 ## One-liner install (macOS & Linux)
 
-Downloads the latest release, installs the binary, and configures autostart.
-
-- **macOS**: installs to `/usr/local/bin`, registers a LaunchAgent (`~/Library/LaunchAgents/com.claude-quota.plist`)
-- **Linux**: installs to `~/.local/share/claude-quota/`, creates a desktop entry in `~/.local/share/applications/` and symlinks it to `~/.config/autostart/`
+**Recommended: just run the installer with no `--providers` flag.** It
+auto-detects providers from your credential files
+(`~/.claude/.credentials.json`, `~/.codex/auth.json`) and installs one tray
+per provider it finds. Re-running the installer after a `claude logout` /
+`codex logout` automatically removes the corresponding tray, so the install
+always reflects what you actually have credentials for.
 
 ```bash
 curl -fsSL \
@@ -49,12 +51,58 @@ curl -fsSL \
   | bash
 ```
 
-Any extra flags are persisted in the startup configuration (LaunchAgent plist on macOS, `.desktop` entry on Linux):
+If neither credential file exists, the installer aborts with a hint to run
+`claude login` / `codex login` first.
+
+- **macOS**: installs the binary to `/usr/local/bin`, registers one
+  LaunchAgent per provider at `~/Library/LaunchAgents/com.github.babs.agent-quota.<provider>.plist`.
+- **Linux**: installs the binary to `~/.local/share/claude-quota/`, creates
+  one desktop entry per provider at `~/.local/share/applications/agent-quota-<provider>.desktop`
+  (labeled `Agent Quota (Claude)` / `Agent Quota (Codex)`) and symlinks each
+  into `~/.config/autostart/`.
+
+### Set semantics
+
+Each install run reflects **desired state**, not additive state. After every
+run, the only `agent-quota-*` entries on disk are the ones in the current
+provider set. So:
+
+- Auto-detect with both creds present → both trays installed.
+- Delete codex creds, re-run → codex tray pruned, claude tray kept.
+- `--providers claude` (explicit) → only claude tray remains, even if a
+  codex tray was previously installed. To install both, run with both creds
+  present and let auto-detect handle it, or pass `--providers claude,codex`.
+
+### Opinionated defaults
+
+The installer auto-injects two flags on top of anything you pass (both
+suppressed if you set them yourself):
+
+- `-indicator bar-proj` — projected 5h-window view, most actionable for a
+  tray that's visible all day.
+- `-provider-mark` — only when installing two or more providers, so both
+  trays are visually distinguishable.
+
+### Extra flags
+
+Any other flags you pass are persisted in the startup configuration (LaunchAgent
+plist on macOS, `.desktop` entry on Linux):
 
 ```bash
 curl -fsSL \
   https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh \
-  | bash -s -- -stats -indicator bar-proj
+  | bash -s -- -stats -provider-mark-color '#DE7356'
+```
+
+### Other modes
+
+Install explicitly for a subset of providers (skips auto-detect; **prunes
+any provider not in the list**):
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh \
+  | bash -s -- --providers claude,codex
 ```
 
 Install without configuring autostart (binary only, user manages startup manually):
@@ -65,13 +113,27 @@ curl -fsSL \
   | bash -s -- --no-autostart
 ```
 
-To uninstall:
+Install a locally built binary instead of fetching from GitHub releases (dev
+workflow):
+
+```bash
+go build -o claude-quota .
+CLAUDE_QUOTA_BIN=$PWD/claude-quota ./scripts/install.sh
+```
+
+To uninstall (cleans up the current `com.github.babs.agent-quota.*` /
+`agent-quota-*` entries plus any legacy `com.claude-quota*` /
+`claude-quota*.desktop` entries from older installs):
 
 ```bash
 curl -fsSL \
   https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh \
   | bash -s -- --uninstall
 ```
+
+> Note: `-provider` is reserved by the installer — pass `--providers <list>`
+> instead, or omit and let auto-detect choose. The installer injects
+> `-provider <name>` into each entry.
 
 ## Build from source
 
@@ -215,14 +277,17 @@ claude-quota.exe -provider codex -codex-home \\wsl$\<distro>\home\<username>
 
 ## Autostart (Linux)
 
-The install script configures autostart automatically. For manual setup, create
-`~/.local/share/applications/claude-quota.desktop`:
+The install script configures autostart automatically (one entry per
+provider). For manual setup, create one file per provider at
+`~/.local/share/applications/agent-quota-<provider>.desktop`, for example
+`agent-quota-claude.desktop`:
 
 ```ini
 [Desktop Entry]
 Type=Application
-Name=Claude Quota Widget
-Exec=$HOME/.local/share/claude-quota/claude-quota
+Name=Agent Quota (Claude)
+Comment=Tray widget for Claude quota (formerly claude-quota)
+Exec=$HOME/.local/share/claude-quota/claude-quota -provider claude
 Icon=$HOME/.local/share/claude-quota/claude-quota.svg
 Hidden=false
 NoDisplay=false
@@ -230,11 +295,13 @@ StartupNotify=false
 Terminal=false
 ```
 
-Then symlink it into autostart:
+Then symlink each file into autostart:
 
 ```bash
-ln -sf ~/.local/share/applications/claude-quota.desktop ~/.config/autostart/
+ln -sf ~/.local/share/applications/agent-quota-claude.desktop ~/.config/autostart/
 ```
+
+Repeat for Codex with `-provider codex` and the `codex` suffix.
 
 ## How it works
 
