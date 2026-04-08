@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -460,9 +462,10 @@ func TestSchemaMigration_DefaultsProviderToClaude(t *testing.T) {
 }
 
 func TestSchemaVersion_RoundTrip(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t)
 
-	version, err := schemaVersion(store.db)
+	version, err := schemaVersion(ctx, store.db)
 	if err != nil {
 		t.Fatalf("schemaVersion() error: %v", err)
 	}
@@ -476,14 +479,14 @@ func TestSchemaVersion_RoundTrip(t *testing.T) {
 	}
 	defer tx.Rollback()
 
-	if err := setSchemaVersion(tx, 1); err != nil {
+	if err := setSchemaVersion(ctx, tx, 1); err != nil {
 		t.Fatalf("setSchemaVersion() error: %v", err)
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("tx.Commit() error: %v", err)
 	}
 
-	version, err = schemaVersion(store.db)
+	version, err = schemaVersion(ctx, store.db)
 	if err != nil {
 		t.Fatalf("schemaVersion() after set error: %v", err)
 	}
@@ -507,7 +510,7 @@ func TestInitSchema_RejectsFutureVersion(t *testing.T) {
 		t.Fatalf("seed future version: %v", err)
 	}
 
-	err = initSchema(db)
+	err = initSchema(context.Background(), db)
 	if err == nil {
 		t.Fatal("initSchema() error = nil, want rejection of future schema version")
 	}
@@ -516,7 +519,68 @@ func TestInitSchema_RejectsFutureVersion(t *testing.T) {
 	}
 }
 
+// TestNewStatsStore_ConcurrentMigration locks in the fix for the race
+// where two trays starting simultaneously on a fresh DB both try to apply
+// the (non-idempotent) v2 ALTER TABLE migrations and the loser fails with
+// "duplicate column". With BEGIN IMMEDIATE + locked re-check, both
+// concurrent NewStatsStore calls must succeed and the schema must end up
+// at currentSchemaVersion.
+func TestNewStatsStore_ConcurrentMigration(t *testing.T) {
+	origPath := statsDBPath
+	statsDBPath = filepath.Join(t.TempDir(), "stats.db")
+	defer func() { statsDBPath = origPath }()
+
+	const N = 4
+	var wg sync.WaitGroup
+	errs := make([]error, N)
+	stores := make([]*StatsStore, N)
+	start := make(chan struct{})
+
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-start // gate so all goroutines race together
+			s, err := NewStatsStore()
+			stores[idx] = s
+			errs[idx] = err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d NewStatsStore() error: %v", i, err)
+		}
+	}
+	for _, s := range stores {
+		if s != nil {
+			s.Close()
+		}
+	}
+	if t.Failed() {
+		return
+	}
+
+	// Open one more time and check the schema converged.
+	s, err := NewStatsStore()
+	if err != nil {
+		t.Fatalf("post-race NewStatsStore() error: %v", err)
+	}
+	defer s.Close()
+
+	version, err := schemaVersion(context.Background(), s.db)
+	if err != nil {
+		t.Fatalf("schemaVersion() error: %v", err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("schemaVersion() = %d, want %d", version, currentSchemaVersion)
+	}
+}
+
 func TestApplyMigration_RollsBackOnFailure(t *testing.T) {
+	ctx := context.Background()
 	origPath := statsDBPath
 	statsDBPath = filepath.Join(t.TempDir(), "stats.db")
 	defer func() { statsDBPath = origPath }()
@@ -531,11 +595,11 @@ func TestApplyMigration_RollsBackOnFailure(t *testing.T) {
 		t.Fatalf("create migration_test: %v", err)
 	}
 
-	err = applyMigration(db, schemaMigration{
+	err = applyMigration(ctx, db, schemaMigration{
 		version: 1,
 		name:    "failing migration",
-		up: func(tx *sql.Tx) error {
-			if _, err := tx.Exec("ALTER TABLE migration_test ADD COLUMN note TEXT"); err != nil {
+		up: func(ctx context.Context, exec sqlExecutor) error {
+			if _, err := exec.ExecContext(ctx, "ALTER TABLE migration_test ADD COLUMN note TEXT"); err != nil {
 				return err
 			}
 			return fmt.Errorf("boom")
@@ -554,7 +618,7 @@ func TestApplyMigration_RollsBackOnFailure(t *testing.T) {
 		t.Fatalf("migration_test.note column count = %d, want 0 after rollback", count)
 	}
 
-	version, err := schemaVersion(db)
+	version, err := schemaVersion(ctx, db)
 	if err != nil {
 		t.Fatalf("schemaVersion() error: %v", err)
 	}

@@ -1,16 +1,48 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+// statsBootstrapMaxAttempts caps how many times NewStatsStore retries on
+// SQLITE_BUSY during the open + WAL switch + schema migration sequence.
+// busy_timeout handles steady-state lock contention, but the brief window
+// where two processes both try to bootstrap a fresh WAL DB (creating the
+// -shm and -wal sidecar files) can race in ways busy_timeout doesn't cover.
+// 10 attempts × 100-500ms backoff covers the race comfortably.
+const statsBootstrapMaxAttempts = 10
+
+// isSQLiteBusy reports whether err is (or wraps) a SQLite "database is
+// locked" / SQLITE_BUSY error. Used by NewStatsStore's bootstrap retry.
+// String matching is unfortunate but the modernc.org/sqlite driver doesn't
+// expose typed error codes in a stable Go interface.
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "SQLITE_BUSY") || strings.Contains(s, "database is locked")
+}
+
+// sqlExecutor is the minimal contract migrations need: a connection-bound
+// executor that runs context-aware Exec/QueryRow. Both *sql.Tx and *sql.Conn
+// satisfy it, which lets applyMigration drive a pinned-connection BEGIN
+// IMMEDIATE flow while keeping the migration bodies portable to test setups
+// that use a transaction.
+type sqlExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
 
 var statsDBPath string
 
@@ -60,24 +92,52 @@ type StatsStore struct {
 	db *sql.DB
 }
 
-// NewStatsStore opens (or creates) the stats database and initializes the schema.
+// NewStatsStore opens (or creates) the stats database and initializes the
+// schema. On a fresh DB with multiple writers (the dual-tray install path
+// is the canonical case), the open + WAL bootstrap + migration sequence
+// retries on SQLITE_BUSY so the loser of any race lands at a clean state.
 func NewStatsStore() (*StatsStore, error) {
 	dir := filepath.Dir(statsDBPath)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("create stats dir %s: %w", dir, err)
 	}
 
-	db, err := sql.Open("sqlite", statsDBPath)
+	var lastErr error
+	for attempt := 0; attempt < statsBootstrapMaxAttempts; attempt++ {
+		store, err := openStatsStore()
+		if err == nil {
+			return store, nil
+		}
+		lastErr = err
+		if !isSQLiteBusy(err) {
+			return nil, err
+		}
+		// Linear backoff with a small base. The race we're guarding against
+		// (concurrent WAL bootstrap on a brand-new DB) resolves in ~ms; this
+		// gives us 10 chances over ~3s total without flooding retries.
+		time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
+	}
+	return nil, fmt.Errorf("stats bootstrap retried %d times: %w", statsBootstrapMaxAttempts, lastErr)
+}
+
+// openStatsStore performs the actual open + bootstrap, factored out so the
+// retry loop in NewStatsStore can call it cleanly.
+func openStatsStore() (*StatsStore, error) {
+	// modernc.org/sqlite honors `_pragma=` query params at connection open
+	// time, applying them to EVERY connection the pool creates. We need this
+	// (rather than db.Exec("PRAGMA …")) because Go's database/sql pool may
+	// hand out a different underlying connection for each call, and PRAGMAs
+	// are per-connection. Setting busy_timeout via DSN guarantees every
+	// connection waits up to 5s for write locks instead of failing
+	// immediately with SQLITE_BUSY. The driver sorts busy_timeout first so
+	// it's effective by the time journal_mode runs.
+	dsn := "file:" + statsDBPath + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(wal)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open stats db: %w", err)
 	}
 
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("set WAL mode: %w", err)
-	}
-
-	if err := initSchema(db); err != nil {
+	if err := initSchema(context.Background(), db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
@@ -85,8 +145,8 @@ func NewStatsStore() (*StatsStore, error) {
 	return &StatsStore{db: db}, nil
 }
 
-func initSchema(db *sql.DB) error {
-	version, err := schemaVersion(db)
+func initSchema(ctx context.Context, db *sql.DB) error {
+	version, err := schemaVersion(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -97,7 +157,7 @@ func initSchema(db *sql.DB) error {
 		if m.version <= version {
 			continue
 		}
-		if err := applyMigration(db, m); err != nil {
+		if err := applyMigration(ctx, db, m); err != nil {
 			return err
 		}
 		version = m.version
@@ -108,15 +168,15 @@ func initSchema(db *sql.DB) error {
 type schemaMigration struct {
 	version int
 	name    string
-	up      func(*sql.Tx) error
+	up      func(ctx context.Context, exec sqlExecutor) error
 }
 
 var schemaMigrations = []schemaMigration{
 	{
 		version: 1,
 		name:    "create initial stats schema",
-		up: func(tx *sql.Tx) error {
-			_, err := tx.Exec(`
+		up: func(ctx context.Context, exec sqlExecutor) error {
+			_, err := exec.ExecContext(ctx, `
 				CREATE TABLE IF NOT EXISTS fetch_stats (
 					id                         INTEGER PRIMARY KEY AUTOINCREMENT,
 					fetched_at                 INTEGER NOT NULL, -- unix timestamp UTC
@@ -167,13 +227,13 @@ var schemaMigrations = []schemaMigration{
 	{
 		version: 2,
 		name:    "add provider columns",
-		up: func(tx *sql.Tx) error {
+		up: func(ctx context.Context, exec sqlExecutor) error {
 			for _, stmt := range []string{
 				`ALTER TABLE fetch_stats ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`,
 				`ALTER TABLE accounts ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`,
 				`ALTER TABLE fetch_errors ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`,
 			} {
-				if _, err := tx.Exec(stmt); err != nil {
+				if _, err := exec.ExecContext(ctx, stmt); err != nil {
 					return fmt.Errorf("apply v2 schema: %w", err)
 				}
 			}
@@ -182,37 +242,91 @@ var schemaMigrations = []schemaMigration{
 	},
 }
 
-func schemaVersion(db *sql.DB) (int, error) {
+// schemaVersion reads PRAGMA user_version. Accepts either *sql.DB or any
+// connection-bound executor — useful so the locked re-check inside
+// applyMigration shares the connection that holds the write lock.
+func schemaVersion(ctx context.Context, src any) (int, error) {
 	var version int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+	var row *sql.Row
+	switch s := src.(type) {
+	case *sql.DB:
+		row = s.QueryRowContext(ctx, "PRAGMA user_version")
+	case sqlExecutor:
+		row = s.QueryRowContext(ctx, "PRAGMA user_version")
+	default:
+		return 0, fmt.Errorf("schemaVersion: unsupported source type %T", src)
+	}
+	if err := row.Scan(&version); err != nil {
 		return 0, fmt.Errorf("read schema version: %w", err)
 	}
 	return version, nil
 }
 
-func setSchemaVersion(tx *sql.Tx, version int) error {
-	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
+func setSchemaVersion(ctx context.Context, exec sqlExecutor, version int) error {
+	if _, err := exec.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
 		return fmt.Errorf("set schema version %d: %w", version, err)
 	}
 	return nil
 }
 
-func applyMigration(db *sql.DB, m schemaMigration) error {
-	tx, err := db.Begin()
+// applyMigration runs a single schema migration under a write-locked
+// transaction (BEGIN IMMEDIATE on a pinned connection). The locked re-check
+// of user_version inside the transaction makes the entire flow safe against
+// concurrent migrators on a fresh DB: a second process arriving here will
+// block at BEGIN IMMEDIATE until the first commits, then read user_version
+// from the now-current state and skip migrations already applied.
+//
+// Without this, two trays starting simultaneously on a fresh stats.db both
+// see user_version=0 outside any transaction, both try to apply v2's
+// non-idempotent ALTER TABLE ADD COLUMN, and the loser fails with
+// "duplicate column".
+func applyMigration(ctx context.Context, db *sql.DB, m schemaMigration) error {
+	conn, err := db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("begin migration v%d (%s): %w", m.version, m.name, err)
+		return fmt.Errorf("acquire conn for migration v%d (%s): %w", m.version, m.name, err)
 	}
-	defer tx.Rollback()
+	defer conn.Close()
 
-	if err := m.up(tx); err != nil {
-		return fmt.Errorf("migration v%d (%s): %w", m.version, m.name, err)
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("begin immediate v%d (%s): %w", m.version, m.name, err)
 	}
-	if err := setSchemaVersion(tx, m.version); err != nil {
+	committed := false
+	defer func() {
+		if !committed {
+			// Best-effort rollback. Use a fresh context so a cancelled ctx
+			// doesn't leave the connection in a half-committed state.
+			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+
+	// Locked re-check: if another writer applied this migration while we
+	// waited for the BEGIN IMMEDIATE lock, the version will already be at
+	// or above m.version and there's nothing to do.
+	current, err := schemaVersion(ctx, conn)
+	if err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if current >= m.version {
+		// Roll back the empty transaction explicitly so the connection is
+		// returned to the pool in a clean state, then mark committed=true
+		// to skip the deferred rollback.
+		if _, err := conn.ExecContext(ctx, "ROLLBACK"); err != nil {
+			return fmt.Errorf("rollback no-op migration v%d: %w", m.version, err)
+		}
+		committed = true
+		return nil
+	}
+
+	if err := m.up(ctx, conn); err != nil {
+		return fmt.Errorf("migration v%d (%s): %w", m.version, m.name, err)
+	}
+	if err := setSchemaVersion(ctx, conn, m.version); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit migration v%d (%s): %w", m.version, m.name, err)
 	}
+	committed = true
 	return nil
 }
 
