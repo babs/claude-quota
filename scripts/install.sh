@@ -643,6 +643,13 @@ main() {
 # Only run main when the script is invoked directly. Test harnesses that
 # `source scripts/install.sh` to exercise individual helpers skip main
 # entirely — this keeps sourcing side-effect-free.
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+#
+# The `${BASH_SOURCE[0]:-$0}` default matters for the `curl | bash` install
+# path: when bash reads the script from stdin there is no source file and
+# BASH_SOURCE is unset, which trips `set -u`. Defaulting to $0 (which is
+# "bash" in that context) makes the comparison succeed and main runs as
+# intended. Direct invocation and `source` are unaffected because both set
+# BASH_SOURCE explicitly.
+if [[ "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then
   main "$@"
 fi

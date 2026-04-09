@@ -336,3 +336,17 @@ teardown() {
   [ "$status" -eq 0 ]
   [[ "$output" != *"Pruned"* ]]
 }
+
+# ──────────────────────────────────────────────────────────────────────
+# stdin / curl | bash invocation
+# ──────────────────────────────────────────────────────────────────────
+@test "BASH_SOURCE guard tolerates stdin invocation (curl | bash)" {
+  # Reproduces the bug where `curl … | bash -s -- -h` errored with
+  # "BASH_SOURCE[0]: unbound variable" because set -u tripped on the
+  # source guard at the bottom of the script. Pipe the file via stdin
+  # and confirm main runs (here via --help, which exits 0 from usage()).
+  run bash -s -- --help < "$INSTALL_SH"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Usage:"* ]]
+  [[ "$output" == *"--providers"* ]]
+}
