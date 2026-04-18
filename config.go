@@ -31,9 +31,14 @@ type Config struct {
 }
 
 // Thresholds defines warning/critical utilization levels.
+// Warning/Critical apply to actual utilization (capped at 100%).
+// ProjectedWarning/ProjectedCritical apply to projected utilization at window
+// reset and may exceed 100% since burn-rate projection can overshoot.
 type Thresholds struct {
-	Warning  float64 `json:"warning"`
-	Critical float64 `json:"critical"`
+	Warning           float64 `json:"warning"`
+	Critical          float64 `json:"critical"`
+	ProjectedWarning  float64 `json:"projected_warning"`
+	ProjectedCritical float64 `json:"projected_critical"`
 }
 
 var configPath string
@@ -62,8 +67,10 @@ func defaultConfig() Config {
 		ProviderMarkPosition: "SE",
 		ShowAccount:          false,
 		Thresholds: Thresholds{
-			Warning:  60,
-			Critical: 85,
+			Warning:           80,
+			Critical:          95,
+			ProjectedWarning:  95,
+			ProjectedCritical: 110,
 		},
 	}
 }
@@ -178,6 +185,19 @@ func loadConfigWithMode(createDefault bool) Config {
 	if cfg.Thresholds.Warning >= cfg.Thresholds.Critical {
 		log.Printf("Config thresholds.warning (%.0f) >= thresholds.critical (%.0f), swapping", cfg.Thresholds.Warning, cfg.Thresholds.Critical)
 		cfg.Thresholds.Warning, cfg.Thresholds.Critical = cfg.Thresholds.Critical, cfg.Thresholds.Warning
+	}
+	// Projected thresholds may exceed 100% (burn-rate projection can overshoot).
+	if cfg.Thresholds.ProjectedWarning <= 0 {
+		log.Printf("Invalid thresholds.projected_warning %v in config, using default %v", cfg.Thresholds.ProjectedWarning, defaults.Thresholds.ProjectedWarning)
+		cfg.Thresholds.ProjectedWarning = defaults.Thresholds.ProjectedWarning
+	}
+	if cfg.Thresholds.ProjectedCritical <= 0 {
+		log.Printf("Invalid thresholds.projected_critical %v in config, using default %v", cfg.Thresholds.ProjectedCritical, defaults.Thresholds.ProjectedCritical)
+		cfg.Thresholds.ProjectedCritical = defaults.Thresholds.ProjectedCritical
+	}
+	if cfg.Thresholds.ProjectedWarning >= cfg.Thresholds.ProjectedCritical {
+		log.Printf("Config thresholds.projected_warning (%.0f) >= thresholds.projected_critical (%.0f), swapping", cfg.Thresholds.ProjectedWarning, cfg.Thresholds.ProjectedCritical)
+		cfg.Thresholds.ProjectedWarning, cfg.Thresholds.ProjectedCritical = cfg.Thresholds.ProjectedCritical, cfg.Thresholds.ProjectedWarning
 	}
 
 	return cfg

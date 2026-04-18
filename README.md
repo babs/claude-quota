@@ -17,7 +17,7 @@ color-coded icon with live quota percentages. Multiple indicator styles availabl
 
 - Claude: 5-hour, 7-day, and Sonnet 7-day quota tracking
 - Codex: primary and secondary usage windows from `backend-api/wham/usage`
-- Color-coded icon: green (<60%), yellow (60-85%), red (>85%)
+- Color-coded icon: green (<80%), yellow (80-95%), red (>=95%); projected uses muted green (<95%), yellow (95-110%), red (>=110%)
 - Multiple indicator styles: pie chart, bar, arc, bar with projection
 - Burn-rate projection: estimates 5h utilization at window reset
 - Optional text overlay toggle (`show_text`)
@@ -92,6 +92,14 @@ plist on macOS, `.desktop` entry on Linux):
 curl -fsSL \
   https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh \
   | bash -s -- -stats -provider-mark-color '#DE7356'
+```
+
+Faster refresh (default poll is `300s` = 5 minutes, set to `60s` for near-live updates):
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/babs/claude-quota/master/scripts/install.sh \
+  | bash -s -- -poll-interval 60
 ```
 
 ### Other modes
@@ -190,8 +198,10 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
   "provider_mark_position": "SE",
   "show_account": false,
   "thresholds": {
-    "warning": 60,
-    "critical": 85
+    "warning": 80,
+    "critical": 95,
+    "projected_warning": 95,
+    "projected_critical": 110
   }
 }
 ```
@@ -215,8 +225,10 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
 | Provider mark color     | `provider_mark_color`   | `CLAUDE_QUOTA_PROVIDER_MARK_COLOR` | `-provider-mark-color` | provider default (`#RGB`, `#RRGGBB`, or `#RRGGBBAA`) |
 | Show account in menu    | `show_account`          | `CLAUDE_QUOTA_SHOW_ACCOUNT`       | `-show-account`       | `false`  |
 | Local stats collection  | `stats`                 | `CLAUDE_QUOTA_STATS`              | `-stats`              | `false`  |
-| Warning threshold (%)   | `thresholds.warning`    | `CLAUDE_QUOTA_WARNING_THRESHOLD`  | `-warning-threshold`  | `60`     |
-| Critical threshold (%)  | `thresholds.critical`   | `CLAUDE_QUOTA_CRITICAL_THRESHOLD` | `-critical-threshold` | `85`     |
+| Warning threshold (%)   | `thresholds.warning`    | `CLAUDE_QUOTA_WARNING_THRESHOLD`  | `-warning-threshold`  | `80`     |
+| Critical threshold (%)  | `thresholds.critical`   | `CLAUDE_QUOTA_CRITICAL_THRESHOLD` | `-critical-threshold` | `95`     |
+| Projected warning (%)   | `thresholds.projected_warning`  | `CLAUDE_QUOTA_PROJECTED_WARNING_THRESHOLD`  | `-projected-warning-threshold`  | `95`  |
+| Projected critical (%)  | `thresholds.projected_critical` | `CLAUDE_QUOTA_PROJECTED_CRITICAL_THRESHOLD` | `-projected-critical-threshold` | `110` |
 
 > **Note:** When enabled, `-stats` stores quota snapshots in a local SQLite database
 > for users who want to analyse their consumption over time. Data never leaves the machine.
