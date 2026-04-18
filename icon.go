@@ -166,16 +166,26 @@ func loadTTFFace(fontName string, size float64) (font.Face, error) {
 	return face, nil
 }
 
-// colorForUtilization returns the appropriate color based on utilization and thresholds.
+// colorForUtilization returns the appropriate color based on actual utilization
+// and thresholds.
 func colorForUtilization(utilization *float64, thresholds Thresholds) color.RGBA {
-	if utilization == nil {
+	return colorForBands(utilization, thresholds.Warning, thresholds.Critical)
+}
+
+// colorForProjection returns the appropriate color based on projected
+// utilization and thresholds. Projected values may exceed 100%.
+func colorForProjection(utilization *float64, thresholds Thresholds) color.RGBA {
+	return colorForBands(utilization, thresholds.ProjectedWarning, thresholds.ProjectedCritical)
+}
+
+func colorForBands(v *float64, warning, critical float64) color.RGBA {
+	if v == nil {
 		return color.RGBA{128, 128, 128, 255} // Gray
 	}
-	v := *utilization
-	if v >= thresholds.Critical {
+	if *v >= critical {
 		return color.RGBA{220, 53, 69, 255} // Red
 	}
-	if v >= thresholds.Warning {
+	if *v >= warning {
 		return color.RGBA{255, 193, 7, 255} // Yellow
 	}
 	return color.RGBA{40, 167, 69, 255} // Green
@@ -267,7 +277,7 @@ func renderIcon(state QuotaState, thresholds Thresholds, opts RenderOptions) ima
 			var projCol color.RGBA
 			if state.FiveHourProjected != nil {
 				projected = state.FiveHourProjected
-				projCol = mutedColor(colorForUtilization(projected, thresholds))
+				projCol = mutedColor(colorForProjection(projected, thresholds))
 			}
 			drawBarProjIcon(dc, utilization, col, projected, projCol, borderCol, p)
 		case "arc":

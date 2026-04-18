@@ -20,8 +20,17 @@ func TestLoadConfig_Default(t *testing.T) {
 	if cfg.FontSize != 34 {
 		t.Errorf("FontSize = %f, want 34", cfg.FontSize)
 	}
-	if cfg.Thresholds.Warning != 60 {
-		t.Errorf("Warning = %f, want 60", cfg.Thresholds.Warning)
+	if cfg.Thresholds.Warning != 80 {
+		t.Errorf("Warning = %f, want 80", cfg.Thresholds.Warning)
+	}
+	if cfg.Thresholds.Critical != 95 {
+		t.Errorf("Critical = %f, want 95", cfg.Thresholds.Critical)
+	}
+	if cfg.Thresholds.ProjectedWarning != 95 {
+		t.Errorf("ProjectedWarning = %f, want 95", cfg.Thresholds.ProjectedWarning)
+	}
+	if cfg.Thresholds.ProjectedCritical != 110 {
+		t.Errorf("ProjectedCritical = %f, want 110", cfg.Thresholds.ProjectedCritical)
 	}
 	if cfg.Provider != "" {
 		t.Errorf("Provider = %q, want empty autodetect default", cfg.Provider)

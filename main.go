@@ -61,6 +61,8 @@ func main() {
 	providerMarkColor := flag.String("provider-mark-color", "", "override provider accent color, hex #RRGGBB (env: CLAUDE_QUOTA_PROVIDER_MARK_COLOR)")
 	warningThreshold := flag.Float64("warning-threshold", 0, "warning utilization threshold in % (env: CLAUDE_QUOTA_WARNING_THRESHOLD)")
 	criticalThreshold := flag.Float64("critical-threshold", 0, "critical utilization threshold in % (env: CLAUDE_QUOTA_CRITICAL_THRESHOLD)")
+	projectedWarningThreshold := flag.Float64("projected-warning-threshold", 0, "projected warning threshold in %, may exceed 100 (env: CLAUDE_QUOTA_PROJECTED_WARNING_THRESHOLD)")
+	projectedCriticalThreshold := flag.Float64("projected-critical-threshold", 0, "projected critical threshold in %, may exceed 100 (env: CLAUDE_QUOTA_PROJECTED_CRITICAL_THRESHOLD)")
 	indicator := flag.String("indicator", "", "indicator type: pie, bar, arc, bar-proj (env: CLAUDE_QUOTA_INDICATOR)")
 	showText := flag.Bool("show-text", true, "show percentage text on icon (env: CLAUDE_QUOTA_SHOW_TEXT)")
 	showAccount := flag.Bool("show-account", false, "show account info in menu (env: CLAUDE_QUOTA_SHOW_ACCOUNT)")
@@ -152,21 +154,23 @@ func main() {
 	})
 
 	applyOverrides(&cfg, overrides{
-		PollInterval:         *pollInterval,
-		FontSize:             *fontSize,
-		FontName:             *fontName,
-		HaloSize:             *haloSize,
-		IconSize:             *iconSize,
-		ProviderMark:         providerMarkOverride,
-		ProviderMarkSize:     *providerMarkSize,
-		ProviderMarkPosition: *providerMarkPosition,
-		ProviderMarkColor:    *providerMarkColor,
-		Indicator:            *indicator,
-		ShowText:             showTextOverride,
-		ShowAccount:          showAccountOverride,
-		Stats:                statsOverride,
-		WarningThreshold:     *warningThreshold,
-		CriticalThreshold:    *criticalThreshold,
+		PollInterval:               *pollInterval,
+		FontSize:                   *fontSize,
+		FontName:                   *fontName,
+		HaloSize:                   *haloSize,
+		IconSize:                   *iconSize,
+		ProviderMark:               providerMarkOverride,
+		ProviderMarkSize:           *providerMarkSize,
+		ProviderMarkPosition:       *providerMarkPosition,
+		ProviderMarkColor:          *providerMarkColor,
+		Indicator:                  *indicator,
+		ShowText:                   showTextOverride,
+		ShowAccount:                showAccountOverride,
+		Stats:                      statsOverride,
+		WarningThreshold:           *warningThreshold,
+		CriticalThreshold:          *criticalThreshold,
+		ProjectedWarningThreshold:  *projectedWarningThreshold,
+		ProjectedCriticalThreshold: *projectedCriticalThreshold,
 	})
 
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -253,21 +257,23 @@ func resolveProvider(flagVal, envVal, cfgVal string) Provider {
 // mutating cfg.Provider here would have been dead code because nothing reads
 // cfg.Provider after applyOverrides, and the on-disk config is not rewritten.
 type overrides struct {
-	PollInterval         int
-	FontSize             float64
-	FontName             string
-	HaloSize             float64
-	IconSize             int
-	ProviderMark         *bool
-	ProviderMarkSize     float64
-	ProviderMarkPosition string
-	ProviderMarkColor    string
-	Indicator            string
-	ShowText             *bool
-	ShowAccount          *bool
-	Stats                *bool
-	WarningThreshold     float64
-	CriticalThreshold    float64
+	PollInterval               int
+	FontSize                   float64
+	FontName                   string
+	HaloSize                   float64
+	IconSize                   int
+	ProviderMark               *bool
+	ProviderMarkSize           float64
+	ProviderMarkPosition       string
+	ProviderMarkColor          string
+	Indicator                  string
+	ShowText                   *bool
+	ShowAccount                *bool
+	Stats                      *bool
+	WarningThreshold           float64
+	CriticalThreshold          float64
+	ProjectedWarningThreshold  float64
+	ProjectedCriticalThreshold float64
 }
 
 // applyIntOverride applies an int override from env var and flag.
@@ -436,5 +442,40 @@ func applyOverrides(cfg *Config, o overrides) {
 	if cfg.Thresholds.Warning >= cfg.Thresholds.Critical {
 		log.Printf("Warning threshold (%.0f) >= critical threshold (%.0f), swapping", cfg.Thresholds.Warning, cfg.Thresholds.Critical)
 		cfg.Thresholds.Warning, cfg.Thresholds.Critical = cfg.Thresholds.Critical, cfg.Thresholds.Warning
+	}
+
+	// Projected thresholds may legitimately exceed 100% since burn-rate
+	// projection overshoots when usage accelerates late in a window.
+	// Sanity-cap at 500 to reject typos/garbage.
+	const projMax = 500
+	if v := os.Getenv("CLAUDE_QUOTA_PROJECTED_WARNING_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err != nil || f <= 0 || f > projMax {
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_PROJECTED_WARNING_THRESHOLD=%q", v)
+		} else {
+			cfg.Thresholds.ProjectedWarning = f
+		}
+	}
+	if o.ProjectedWarningThreshold > 0 && o.ProjectedWarningThreshold <= projMax {
+		cfg.Thresholds.ProjectedWarning = o.ProjectedWarningThreshold
+	} else if o.ProjectedWarningThreshold > projMax {
+		log.Printf("Ignoring invalid -projected-warning-threshold=%.0f (must be 1-%d)", o.ProjectedWarningThreshold, projMax)
+	}
+
+	if v := os.Getenv("CLAUDE_QUOTA_PROJECTED_CRITICAL_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err != nil || f <= 0 || f > projMax {
+			log.Printf("Ignoring invalid CLAUDE_QUOTA_PROJECTED_CRITICAL_THRESHOLD=%q", v)
+		} else {
+			cfg.Thresholds.ProjectedCritical = f
+		}
+	}
+	if o.ProjectedCriticalThreshold > 0 && o.ProjectedCriticalThreshold <= projMax {
+		cfg.Thresholds.ProjectedCritical = o.ProjectedCriticalThreshold
+	} else if o.ProjectedCriticalThreshold > projMax {
+		log.Printf("Ignoring invalid -projected-critical-threshold=%.0f (must be 1-%d)", o.ProjectedCriticalThreshold, projMax)
+	}
+
+	if cfg.Thresholds.ProjectedWarning >= cfg.Thresholds.ProjectedCritical {
+		log.Printf("Projected warning threshold (%.0f) >= projected critical threshold (%.0f), swapping", cfg.Thresholds.ProjectedWarning, cfg.Thresholds.ProjectedCritical)
+		cfg.Thresholds.ProjectedWarning, cfg.Thresholds.ProjectedCritical = cfg.Thresholds.ProjectedCritical, cfg.Thresholds.ProjectedWarning
 	}
 }

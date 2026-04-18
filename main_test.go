@@ -273,22 +273,22 @@ func TestApplyOverrides_ThresholdInvalidEnvIgnored(t *testing.T) {
 	t.Setenv("CLAUDE_QUOTA_CRITICAL_THRESHOLD", "150")
 	cfg := defaultConfig()
 	applyOverrides(&cfg, noOverrides)
-	if cfg.Thresholds.Warning != 60 {
-		t.Errorf("Warning = %f, want 60 (invalid env should be ignored)", cfg.Thresholds.Warning)
+	if cfg.Thresholds.Warning != 80 {
+		t.Errorf("Warning = %f, want 80 (invalid env should be ignored)", cfg.Thresholds.Warning)
 	}
-	if cfg.Thresholds.Critical != 85 {
-		t.Errorf("Critical = %f, want 85 (invalid env should be ignored)", cfg.Thresholds.Critical)
+	if cfg.Thresholds.Critical != 95 {
+		t.Errorf("Critical = %f, want 95 (invalid env should be ignored)", cfg.Thresholds.Critical)
 	}
 }
 
 func TestApplyOverrides_ThresholdFlagOver100Ignored(t *testing.T) {
 	cfg := defaultConfig()
 	applyOverrides(&cfg, overrides{HaloSize: -1, WarningThreshold: 200, CriticalThreshold: 300})
-	if cfg.Thresholds.Warning != 60 {
-		t.Errorf("Warning = %f, want 60 (>100 flag should be ignored)", cfg.Thresholds.Warning)
+	if cfg.Thresholds.Warning != 80 {
+		t.Errorf("Warning = %f, want 80 (>100 flag should be ignored)", cfg.Thresholds.Warning)
 	}
-	if cfg.Thresholds.Critical != 85 {
-		t.Errorf("Critical = %f, want 85 (>100 flag should be ignored)", cfg.Thresholds.Critical)
+	if cfg.Thresholds.Critical != 95 {
+		t.Errorf("Critical = %f, want 95 (>100 flag should be ignored)", cfg.Thresholds.Critical)
 	}
 }
 
