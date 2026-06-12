@@ -556,6 +556,145 @@ func withIsolatedCredentials(t *testing.T, createClaude, createCodex bool) {
 	})
 }
 
+func TestResolveCredentialPath(t *testing.T) {
+	const subdir, filename = ".claude", ".credentials.json"
+	join := func(home string) string { return filepath.Join(home, subdir, filename) }
+
+	cases := []struct {
+		name       string
+		cfgHome    string
+		cfgDirect  string
+		envHome    string
+		envDirect  string
+		flagHome   string
+		flagDirect string
+		want       string
+	}{
+		{
+			name: "all empty returns empty",
+			want: "",
+		},
+		// Home chain: config < env < flag
+		{
+			name:    "config home sets path",
+			cfgHome: "/cfg",
+			want:    join("/cfg"),
+		},
+		{
+			name:    "env home overrides config home",
+			cfgHome: "/cfg",
+			envHome: "/env",
+			want:    join("/env"),
+		},
+		{
+			name:     "flag home overrides env home",
+			cfgHome:  "/cfg",
+			envHome:  "/env",
+			flagHome: "/flag",
+			want:     join("/flag"),
+		},
+		// Direct chain: config < env < flag
+		{
+			name:      "config direct sets path",
+			cfgDirect: "/cfg/creds.json",
+			want:      "/cfg/creds.json",
+		},
+		{
+			name:      "env direct overrides config direct",
+			cfgDirect: "/cfg/creds.json",
+			envDirect: "/env/creds.json",
+			want:      "/env/creds.json",
+		},
+		{
+			name:       "flag direct overrides env direct",
+			cfgDirect:  "/cfg/creds.json",
+			envDirect:  "/env/creds.json",
+			flagDirect: "/flag/creds.json",
+			want:       "/flag/creds.json",
+		},
+		// Direct always beats home regardless of source level (M1 fix)
+		{
+			name:      "config direct beats config home",
+			cfgHome:   "/home",
+			cfgDirect: "/direct/creds.json",
+			want:      "/direct/creds.json",
+		},
+		{
+			name:      "config direct beats env home",
+			cfgDirect: "/direct/creds.json",
+			envHome:   "/env",
+			want:      "/direct/creds.json",
+		},
+		{
+			name:      "config direct beats flag home",
+			cfgDirect: "/direct/creds.json",
+			flagHome:  "/flag",
+			want:      "/direct/creds.json",
+		},
+		{
+			name:      "env direct beats config home",
+			cfgHome:   "/cfg",
+			envDirect: "/env/creds.json",
+			want:      "/env/creds.json",
+		},
+		{
+			name:      "env direct beats env home",
+			envHome:   "/env",
+			envDirect: "/env/creds.json",
+			want:      "/env/creds.json",
+		},
+		{
+			name:      "env direct beats flag home",
+			flagHome:  "/flag",
+			envDirect: "/env/creds.json",
+			want:      "/env/creds.json",
+		},
+		{
+			name:       "flag direct beats config home",
+			cfgHome:    "/cfg",
+			flagDirect: "/flag/creds.json",
+			want:       "/flag/creds.json",
+		},
+		{
+			name:       "flag direct beats env home",
+			envHome:    "/env",
+			flagDirect: "/flag/creds.json",
+			want:       "/flag/creds.json",
+		},
+		{
+			name:       "flag direct beats flag home",
+			flagHome:   "/flag",
+			flagDirect: "/flag/creds.json",
+			want:       "/flag/creds.json",
+		},
+		// All sources set: flag direct wins
+		{
+			name:       "flag direct wins all",
+			cfgHome:    "/cfg",
+			cfgDirect:  "/cfg/creds.json",
+			envHome:    "/env",
+			envDirect:  "/env/creds.json",
+			flagHome:   "/flag",
+			flagDirect: "/flag/creds.json",
+			want:       "/flag/creds.json",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveCredentialPath(
+				credentialSources{tc.cfgHome, tc.cfgDirect},
+				credentialSources{tc.envHome, tc.envDirect},
+				credentialSources{tc.flagHome, tc.flagDirect},
+				subdir, filename,
+			)
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolveProvider(t *testing.T) {
 	cases := []struct {
 		name      string

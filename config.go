@@ -14,7 +14,9 @@ import (
 type Config struct {
 	Provider             string     `json:"provider,omitempty"`
 	ClaudeHome           string     `json:"claude_home,omitempty"`
+	ClaudeCredentials    string     `json:"claude_credentials,omitempty"`
 	CodexHome            string     `json:"codex_home,omitempty"`
+	CodexCredentials     string     `json:"codex_credentials,omitempty"`
 	PollIntervalSeconds  int        `json:"poll_interval_seconds"`
 	FontSize             float64    `json:"font_size"`
 	FontName             string     `json:"font_name"`
