@@ -132,7 +132,7 @@ func (r *AccountResolver) fetchProfile(accessToken string) (AccountInfo, error) 
 	if err != nil {
 		return AccountInfo{}, fmt.Errorf("fetch profile: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return AccountInfo{}, fmt.Errorf("profile API returned %d", resp.StatusCode)

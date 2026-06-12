@@ -138,7 +138,7 @@ func openStatsStore() (*StatsStore, error) {
 	}
 
 	if err := initSchema(context.Background(), db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 
@@ -285,7 +285,7 @@ func applyMigration(ctx context.Context, db *sql.DB, m schemaMigration) error {
 	if err != nil {
 		return fmt.Errorf("acquire conn for migration v%d (%s): %w", m.version, m.name, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return fmt.Errorf("begin immediate v%d (%s): %w", m.version, m.name, err)

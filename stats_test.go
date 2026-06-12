@@ -20,7 +20,7 @@ func TestNewStatsStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStatsStore() error: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	var tableName string
 	err = store.db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='fetch_stats'").Scan(&tableName)
@@ -49,7 +49,7 @@ func TestRecordFetch_Full(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStatsStore() error: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	resets5h := now.Add(3 * time.Hour)
@@ -117,7 +117,7 @@ func TestRecordFetch_NilFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStatsStore() error: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	state := QuotaState{
@@ -157,7 +157,7 @@ func TestRecordFetch_MultipleRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStatsStore() error: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	for i := range 3 {
 		now := time.Date(2026, 3, 1, 12, i, 0, 0, time.UTC)
@@ -202,7 +202,7 @@ func newTestStore(t *testing.T) *StatsStore {
 	if err != nil {
 		t.Fatalf("NewStatsStore() error: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
 
@@ -360,7 +360,7 @@ func TestLookupAccount_BumpsUpdatedAt(t *testing.T) {
 
 	// Read initial updated_at.
 	var updatedBefore int64
-	store.db.QueryRow("SELECT updated_at FROM accounts WHERE refresh_token_hash = 'hash-abc'").Scan(&updatedBefore)
+	_ = store.db.QueryRow("SELECT updated_at FROM accounts WHERE refresh_token_hash = 'hash-abc'").Scan(&updatedBefore)
 
 	// Wait a tiny bit to ensure timestamp changes.
 	time.Sleep(1100 * time.Millisecond)
@@ -368,7 +368,7 @@ func TestLookupAccount_BumpsUpdatedAt(t *testing.T) {
 	store.LookupAccount("hash-abc")
 
 	var updatedAfter int64
-	store.db.QueryRow("SELECT updated_at FROM accounts WHERE refresh_token_hash = 'hash-abc'").Scan(&updatedAfter)
+	_ = store.db.QueryRow("SELECT updated_at FROM accounts WHERE refresh_token_hash = 'hash-abc'").Scan(&updatedAfter)
 	if updatedAfter <= updatedBefore {
 		t.Errorf("updated_at should have been bumped: before=%d, after=%d", updatedBefore, updatedAfter)
 	}
@@ -403,7 +403,7 @@ func TestSchemaMigration_DefaultsProviderToClaude(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open() error: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	_, err = db.Exec(`
 		CREATE TABLE fetch_stats (
@@ -436,7 +436,7 @@ func TestSchemaMigration_DefaultsProviderToClaude(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStatsStore() migration error: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	for _, query := range []string{
 		"SELECT provider FROM fetch_stats WHERE id=1",
@@ -477,7 +477,7 @@ func TestSchemaVersion_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db.Begin() error: %v", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if err := setSchemaVersion(ctx, tx, 1); err != nil {
 		t.Fatalf("setSchemaVersion() error: %v", err)
@@ -504,7 +504,7 @@ func TestInitSchema_RejectsFutureVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open() error: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", currentSchemaVersion+1)); err != nil {
 		t.Fatalf("seed future version: %v", err)
@@ -556,7 +556,7 @@ func TestNewStatsStore_ConcurrentMigration(t *testing.T) {
 	}
 	for _, s := range stores {
 		if s != nil {
-			s.Close()
+			_ = s.Close()
 		}
 	}
 	if t.Failed() {
@@ -568,7 +568,7 @@ func TestNewStatsStore_ConcurrentMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post-race NewStatsStore() error: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	version, err := schemaVersion(context.Background(), s.db)
 	if err != nil {
@@ -589,7 +589,7 @@ func TestApplyMigration_RollsBackOnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open() error: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if _, err := db.Exec("CREATE TABLE migration_test (id INTEGER PRIMARY KEY)"); err != nil {
 		t.Fatalf("create migration_test: %v", err)

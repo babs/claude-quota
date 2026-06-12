@@ -12,6 +12,14 @@ repos:
       - id: go-unit-tests
   - repo: local
     hooks:
+      # Uses the locally installed golangci-lint (config in .golangci.yml).
+      # pass_filenames is off: golangci-lint resolves packages itself.
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run
+        language: system
+        types: [go]
+        pass_filenames: false
       # Scoped to scripts/install.sh only: other .sh files in the repo have
       # pre-existing shellcheck findings that are out of scope for this
       # project's installer hardening work.

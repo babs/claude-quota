@@ -128,7 +128,7 @@ func TestLoad_InvalidJSON(t *testing.T) {
 
 	dir := t.TempDir()
 	claudeCredentialsPath = filepath.Join(dir, "credentials.json")
-	os.WriteFile(claudeCredentialsPath, []byte("{invalid"), 0600)
+	_ = os.WriteFile(claudeCredentialsPath, []byte("{invalid"), 0600)
 
 	oc := &OAuthCredentials{provider: ProviderClaude}
 	if err := oc.load(); err == nil {
@@ -296,7 +296,7 @@ func TestReloadAndSnapshot_Changed(t *testing.T) {
 		"expiresAt":    time.Now().UnixMilli() + 300_000,
 	}
 	data, _ := json.Marshal(map[string]any{"claudeAiOauth": inner})
-	os.WriteFile(filepath.Join(dir, filepath.Base(claudeCredentialsPath)), data, 0600)
+	_ = os.WriteFile(filepath.Join(dir, filepath.Base(claudeCredentialsPath)), data, 0600)
 
 	snap, err := oc.ReloadAndSnapshot()
 	if err != nil {

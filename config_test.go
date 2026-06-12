@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -47,7 +50,7 @@ func TestLoadConfig_EmptyProviderStaysAutodetect(t *testing.T) {
 
 	dir := t.TempDir()
 	configPath = filepath.Join(dir, "config.json")
-	os.WriteFile(configPath, []byte(`{"provider":"","poll_interval_seconds":60}`), 0600)
+	_ = os.WriteFile(configPath, []byte(`{"provider":"","poll_interval_seconds":60}`), 0600)
 
 	cfg := loadConfig()
 	if cfg.Provider != "" {
@@ -68,7 +71,7 @@ func TestLoadConfig_ExistingFile(t *testing.T) {
 		Thresholds:          Thresholds{Warning: 50, Critical: 90},
 	}
 	data, _ := json.MarshalIndent(custom, "", "  ")
-	os.WriteFile(configPath, data, 0600)
+	_ = os.WriteFile(configPath, data, 0600)
 
 	cfg := loadConfig()
 	if cfg.PollIntervalSeconds != 60 {
@@ -88,7 +91,7 @@ func TestLoadConfig_PartialFile(t *testing.T) {
 
 	dir := t.TempDir()
 	configPath = filepath.Join(dir, "config.json")
-	os.WriteFile(configPath, []byte(`{"poll_interval_seconds": 60}`), 0600)
+	_ = os.WriteFile(configPath, []byte(`{"poll_interval_seconds": 60}`), 0600)
 
 	cfg := loadConfig()
 	if cfg.PollIntervalSeconds != 60 {
@@ -114,7 +117,7 @@ func TestLoadConfig_ValidProviderMarkColor(t *testing.T) {
 
 	dir := t.TempDir()
 	configPath = filepath.Join(dir, "config.json")
-	os.WriteFile(configPath, []byte(`{"provider_mark_color":"#DE7356"}`), 0600)
+	_ = os.WriteFile(configPath, []byte(`{"provider_mark_color":"#DE7356"}`), 0600)
 
 	cfg := loadConfig()
 	if cfg.ProviderMarkColor != "#DE7356" {
@@ -128,7 +131,7 @@ func TestLoadConfig_InvalidProviderMarkColorReset(t *testing.T) {
 
 	dir := t.TempDir()
 	configPath = filepath.Join(dir, "config.json")
-	os.WriteFile(configPath, []byte(`{"provider_mark_color":"not-a-color"}`), 0600)
+	_ = os.WriteFile(configPath, []byte(`{"provider_mark_color":"not-a-color"}`), 0600)
 
 	cfg := loadConfig()
 	if cfg.ProviderMarkColor != "" {
@@ -142,7 +145,7 @@ func TestLoadConfig_InvalidJSON(t *testing.T) {
 
 	dir := t.TempDir()
 	configPath = filepath.Join(dir, "config.json")
-	os.WriteFile(configPath, []byte(`{broken`), 0600)
+	_ = os.WriteFile(configPath, []byte(`{broken`), 0600)
 
 	cfg := loadConfig()
 	if cfg.PollIntervalSeconds != 300 {
@@ -169,7 +172,7 @@ func TestSaveConfig(t *testing.T) {
 	}
 
 	var loaded Config
-	json.Unmarshal(data, &loaded)
+	_ = json.Unmarshal(data, &loaded)
 	if loaded.PollIntervalSeconds != 120 {
 		t.Errorf("PollIntervalSeconds = %d, want 120", loaded.PollIntervalSeconds)
 	}
@@ -194,5 +197,87 @@ func TestWriteFileSecure_Permissions(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if string(data) != "test" {
 		t.Errorf("content = %q, want %q", string(data), "test")
+	}
+}
+
+func TestWriteFileSecure_MkdirError(t *testing.T) {
+	dir := t.TempDir()
+	// A regular file standing in for a parent directory makes MkdirAll fail.
+	notADir := filepath.Join(dir, "file")
+	if err := os.WriteFile(notADir, []byte("x"), 0600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	err := writeFileSecure(filepath.Join(notADir, "child.txt"), []byte("data"))
+	if err == nil {
+		t.Fatal("writeFileSecure() should fail when the parent path is not a directory")
+	}
+	if !strings.Contains(err.Error(), "create dir") {
+		t.Errorf("error = %v, want it to mention 'create dir'", err)
+	}
+}
+
+func TestWriteFileSecure_OpenError(t *testing.T) {
+	dir := t.TempDir()
+	// Targeting an existing directory makes OpenFile fail (the parent already
+	// exists, so MkdirAll succeeds and we reach the open).
+	err := writeFileSecure(dir, []byte("data"))
+	if err == nil {
+		t.Fatal("writeFileSecure() should fail when the target path is a directory")
+	}
+	if !strings.Contains(err.Error(), "open") {
+		t.Errorf("error = %v, want it to mention 'open'", err)
+	}
+}
+
+// fakeWriteCloser lets tests force Write and/or Close to fail.
+type fakeWriteCloser struct {
+	writeErr error
+	closeErr error
+}
+
+func (f fakeWriteCloser) Write(p []byte) (int, error) {
+	if f.writeErr != nil {
+		return 0, f.writeErr
+	}
+	return len(p), nil
+}
+
+func (f fakeWriteCloser) Close() error { return f.closeErr }
+
+func TestWriteFileSecure_CloseError(t *testing.T) {
+	orig := openFileFn
+	defer func() { openFileFn = orig }()
+	openFileFn = func(string) (io.WriteCloser, error) {
+		return fakeWriteCloser{closeErr: errors.New("close boom")}, nil
+	}
+
+	err := writeFileSecure(filepath.Join(t.TempDir(), "f.txt"), []byte("data"))
+	if err == nil {
+		t.Fatal("writeFileSecure() should surface a close error when the write succeeded")
+	}
+	if !strings.Contains(err.Error(), "close") {
+		t.Errorf("error = %v, want it to mention 'close'", err)
+	}
+}
+
+func TestWriteFileSecure_WriteErrorNotMaskedByClose(t *testing.T) {
+	orig := openFileFn
+	defer func() { openFileFn = orig }()
+	// Both Write and Close fail; the write error is the relevant one and must
+	// not be overwritten by the close error.
+	openFileFn = func(string) (io.WriteCloser, error) {
+		return fakeWriteCloser{writeErr: errors.New("write boom"), closeErr: errors.New("close boom")}, nil
+	}
+
+	err := writeFileSecure(filepath.Join(t.TempDir(), "f.txt"), []byte("data"))
+	if err == nil {
+		t.Fatal("writeFileSecure() should fail when the write fails")
+	}
+	if !strings.Contains(err.Error(), "write") {
+		t.Errorf("error = %v, want the write error preserved, not masked by close", err)
+	}
+	if strings.Contains(err.Error(), "close") {
+		t.Errorf("error = %v, close error should not mask the write error", err)
 	}
 }

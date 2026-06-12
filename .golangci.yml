@@ -1,0 +1,26 @@
+# golangci-lint v2 configuration.
+#
+# Default linters (errcheck, govet, ineffassign, staticcheck, unused) stay
+# enabled; the list below adds a few extra linters we enforce.
+#
+# gosec and noctx are intentionally not enabled: this is a single-user local
+# tray app that reads its own config and talks to a fixed endpoint, so gosec's
+# taint-analysis rules (SSRF, log-injection, path-traversal) and noctx's
+# context-threading requirements produce only false positives or churn with no
+# real benefit here.
+version: "2"
+
+# Report every finding rather than golangci-lint's default per-issue caps, so
+# duplicate findings (e.g. the same unchecked Close() across many tests) are all
+# surfaced instead of silently truncated.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  enable:
+    - bodyclose
+    - gocritic
+    - misspell
+    - revive
+    - unconvert

@@ -56,7 +56,7 @@ func formatUpdatedAgo(t *time.Time) string {
 		return fmt.Sprintf("Updated: %dm %ds ago", minutes, seconds)
 	}
 	hours := minutes / 60
-	minutes = minutes % 60
+	minutes %= 60
 	return fmt.Sprintf("Updated: %dh %dm ago", hours, minutes)
 }
 

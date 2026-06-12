@@ -1,3 +1,5 @@
+// Command claude-quota is a system-tray widget that displays Claude Code and
+// Codex usage quotas as a color-coded icon.
 package main
 
 import (

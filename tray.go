@@ -164,7 +164,7 @@ func (a *App) onExit() {
 		close(a.quit)
 	}
 	if a.stats != nil {
-		a.stats.Close()
+		_ = a.stats.Close()
 	}
 }
 
