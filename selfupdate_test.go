@@ -16,7 +16,7 @@ func TestFetchLatestVersion_LimitsResponseBody(t *testing.T) {
 		updateHTTPClient = origClient
 	}()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, `{"name":"v1.2.3","padding":"`)
 		_, _ = fmt.Fprint(w, strings.Repeat("x", latestReleaseResponseLimit))

@@ -158,7 +158,7 @@ func (qc *QuotaClient) Fetch() bool {
 		qc.setErrorTyped(truncate(err.Error(), 50), ErrTypeNetwork, 0)
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		var msg string

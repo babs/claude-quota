@@ -93,11 +93,6 @@ func defaultProvider() Provider {
 	return p
 }
 
-func fileExists(path string) bool {
-	_, ok := fileInfo(path)
-	return ok
-}
-
 func fileInfo(path string) (os.FileInfo, bool) {
 	if path == "" {
 		return nil, false

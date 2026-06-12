@@ -35,7 +35,7 @@ func fetchLatestVersion() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
@@ -72,7 +72,7 @@ func applyUpdate(version string) error {
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
-	defer dlResp.Body.Close()
+	defer func() { _ = dlResp.Body.Close() }()
 
 	if dlResp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download returned HTTP %d", dlResp.StatusCode)
@@ -111,7 +111,7 @@ func selfUpdate() {
 		fmt.Println("New version available, upgrading...")
 		if Version == "v0.0.0" {
 			fmt.Print("Development build detected, press Enter to proceed: ")
-			bufio.NewReader(os.Stdin).ReadBytes('\n')
+			_, _ = bufio.NewReader(os.Stdin).ReadBytes('\n')
 		}
 	}
 

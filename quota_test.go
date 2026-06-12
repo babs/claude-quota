@@ -181,7 +181,7 @@ func TestFetch_Success(t *testing.T) {
 			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
 		}
 		w.WriteHeader(200)
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"five_hour": {"utilization": 42.5, "resets_at": "2026-02-06T14:30:00Z"},
 			"seven_day": {"utilization": 73.0},
 			"seven_day_sonnet": {"utilization": 10.0}
@@ -226,7 +226,7 @@ func TestFetch_ComputesProjection(t *testing.T) {
 	resetsAt := time.Now().UTC().Add(1 * time.Hour).Format(time.RFC3339)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"five_hour": {"utilization": 50.0, "resets_at": "` + resetsAt + `"},
 			"seven_day": {"utilization": 10.0}
 		}`))
@@ -258,7 +258,7 @@ func TestFetch_ComputesSaturation(t *testing.T) {
 	resetsAt := time.Now().UTC().Add(4 * time.Hour).Format(time.RFC3339)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"five_hour": {"utilization": 80.0, "resets_at": "` + resetsAt + `"},
 			"seven_day": {"utilization": 10.0}
 		}`))
@@ -344,7 +344,7 @@ func TestFetch_HTTP403(t *testing.T) {
 func TestFetch_InvalidJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(`{not json`))
+		_, _ = w.Write([]byte(`{not json`))
 	}))
 	defer srv.Close()
 
@@ -395,7 +395,7 @@ func TestFetch_CodexSuccess(t *testing.T) {
 			t.Errorf("ChatGPT-Account-Id = %q", r.Header.Get("ChatGPT-Account-Id"))
 		}
 		w.WriteHeader(200)
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"account_id": "acct_123",
 			"email": "user@example.com",
 			"plan_type": "team",
@@ -682,7 +682,7 @@ func TestFetch_ComputesSevenDayProjection(t *testing.T) {
 	resetsAt := time.Now().UTC().Add(3 * 24 * time.Hour).Format(time.RFC3339)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"five_hour": {"utilization": 10.0},
 			"seven_day": {"utilization": 20.0, "resets_at": "` + resetsAt + `"}
 		}`))
@@ -713,7 +713,7 @@ func TestFetch_ComputesSevenDaySaturation(t *testing.T) {
 	resetsAt := time.Now().UTC().Add(6 * 24 * time.Hour).Format(time.RFC3339)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"five_hour": {"utilization": 10.0},
 			"seven_day": {"utilization": 80.0, "resets_at": "` + resetsAt + `"}
 		}`))

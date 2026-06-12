@@ -9,7 +9,7 @@ import (
 func TestIconToBytes_ValidICO(t *testing.T) {
 	state := QuotaState{}
 	th := Thresholds{Warning: 60, Critical: 85}
-	img := renderIcon(state, th, 34, 64, "bold", 2)
+	img := renderIcon(state, th, testOpts())
 	data, err := iconToBytes(img)
 	if err != nil {
 		t.Fatalf("iconToBytes error: %v", err)

@@ -22,7 +22,7 @@ func TestFetchProfile_Success(t *testing.T) {
 			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
 		}
 		w.WriteHeader(200)
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"account": {"uuid": "acct-uuid-123", "email": "user@example.com"},
 			"organization": {"uuid": "org-uuid-456", "name": "My Org"}
 		}`))
@@ -72,7 +72,7 @@ func TestFetchProfile_NonOK(t *testing.T) {
 func TestFetchProfile_InvalidJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(`{not json`))
+		_, _ = w.Write([]byte(`{not json`))
 	}))
 	defer srv.Close()
 
@@ -98,7 +98,7 @@ func TestResolve_NilResolver(t *testing.T) {
 func TestResolve_NilStats_CallsAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(`{"account":{"uuid":"uuid-no-db","email":"no-db@example.com"},"organization":{"uuid":"org-1","name":"No DB Org"}}`))
+		_, _ = w.Write([]byte(`{"account":{"uuid":"uuid-no-db","email":"no-db@example.com"},"organization":{"uuid":"org-1","name":"No DB Org"}}`))
 	}))
 	defer srv.Close()
 
@@ -124,7 +124,7 @@ func TestResolve_NilStats_InMemoryCache(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		w.WriteHeader(200)
-		w.Write([]byte(`{"account":{"uuid":"cached","email":"c@d.com"},"organization":{}}`))
+		_, _ = w.Write([]byte(`{"account":{"uuid":"cached","email":"c@d.com"},"organization":{}}`))
 	}))
 	defer srv.Close()
 
@@ -145,7 +145,7 @@ func TestResolve_NilStats_InMemoryCacheInvalidation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		w.WriteHeader(200)
-		w.Write([]byte(`{"account":{"uuid":"u-` + r.Header.Get("Authorization") + `","email":"a@b.com"},"organization":{}}`))
+		_, _ = w.Write([]byte(`{"account":{"uuid":"u-` + r.Header.Get("Authorization") + `","email":"a@b.com"},"organization":{}}`))
 	}))
 	defer srv.Close()
 
@@ -170,7 +170,7 @@ func TestResolve_EmptyHash(t *testing.T) {
 	defer func() { statsDBPath = origPath }()
 
 	store, _ := NewStatsStore()
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	r := NewAccountResolver(ProviderClaude, &http.Client{}, store)
 	info := r.Resolve(testSnap("token", ""))
@@ -185,7 +185,7 @@ func TestResolve_CacheHit(t *testing.T) {
 	defer func() { statsDBPath = origPath }()
 
 	store, _ := NewStatsStore()
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Pre-populate cache.
 	store.UpsertAccount(ProviderClaude, "hash-123", AccountInfo{
@@ -217,11 +217,11 @@ func TestResolve_CacheMiss(t *testing.T) {
 	defer func() { statsDBPath = origPath }()
 
 	store, _ := NewStatsStore()
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(`{"account":{"uuid":"api-uuid","email":"api@example.com"},"organization":{}}`))
+		_, _ = w.Write([]byte(`{"account":{"uuid":"api-uuid","email":"api@example.com"},"organization":{}}`))
 	}))
 	defer srv.Close()
 
@@ -251,7 +251,7 @@ func TestResolve_APIErrorFallback(t *testing.T) {
 	defer func() { statsDBPath = origPath }()
 
 	store, _ := NewStatsStore()
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(500)
@@ -276,11 +276,11 @@ func TestResolve_PassesSubscriptionInfo(t *testing.T) {
 	defer func() { statsDBPath = origPath }()
 
 	store, _ := NewStatsStore()
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(`{"account":{"uuid":"uuid-1","email":"a@b.com"},"organization":{}}`))
+		_, _ = w.Write([]byte(`{"account":{"uuid":"uuid-1","email":"a@b.com"},"organization":{}}`))
 	}))
 	defer srv.Close()
 
@@ -320,7 +320,7 @@ func TestResolve_CodexUsesAccountID(t *testing.T) {
 	defer func() { statsDBPath = origPath }()
 
 	store, _ := NewStatsStore()
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	r := NewAccountResolver(ProviderCodex, &http.Client{}, store)
 	info := r.Resolve(CredentialSnapshot{

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -212,18 +213,31 @@ func saveConfig(cfg Config) error {
 	return writeFileSecure(configPath, data)
 }
 
+// openFileFn creates the destination file with 0600 permissions. It is a
+// package var so tests can substitute a writer whose Close fails, exercising
+// the close-error path in writeFileSecure.
+var openFileFn = func(path string) (io.WriteCloser, error) {
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+}
+
 // writeFileSecure writes data to path with 0600 permissions, creating parent dirs.
-func writeFileSecure(path string, data []byte) error {
+func writeFileSecure(path string, data []byte) (err error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create dir %s: %w", dir, err)
 	}
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	f, err := openFileFn(path)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
 	}
-	defer f.Close()
+	// Surface a close error (e.g. a delayed write-back failure) only when the
+	// write itself succeeded, so the more relevant write error is not masked.
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("close %s: %w", path, cerr)
+		}
+	}()
 
 	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)

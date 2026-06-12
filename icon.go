@@ -260,11 +260,12 @@ func renderIcon(state QuotaState, thresholds Thresholds, opts RenderOptions) ima
 	if opts.ProviderMarkColor.A != 0 {
 		accent = opts.ProviderMarkColor
 	}
-	if state.TokenExpired {
+	switch {
+	case state.TokenExpired:
 		drawExpiredIcon(dc, p)
-	} else if state.Error != "" {
+	case state.Error != "":
 		drawErrorIcon(dc, p)
-	} else {
+	default:
 		borderCol := col
 		if p.providerMark {
 			borderCol = accent
