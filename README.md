@@ -211,7 +211,9 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
 | Provider                | `provider`              | `CLAUDE_QUOTA_PROVIDER`           | `-provider`           | auto-detect by newest credentials file |
 | Dry-run mode            | n/a                     | n/a                               | `-dry-run`            | `false`   |
 | Claude home dir         | `claude_home`           | `CLAUDE_QUOTA_CLAUDE_HOME`        | `-claude-home`        | `~`      |
+| Claude credentials path | `claude_credentials`    | `CLAUDE_QUOTA_CLAUDE_CREDENTIALS` | `-claude-credentials` | `~/.claude/.credentials.json` (follows `claude_home` if set) |
 | Codex home dir          | `codex_home`            | `CLAUDE_QUOTA_CODEX_HOME`         | `-codex-home`         | `~`      |
+| Codex credentials path  | `codex_credentials`     | `CLAUDE_QUOTA_CODEX_CREDENTIALS`  | `-codex-credentials`  | `~/.codex/auth.json` (follows `codex_home` if set) |
 | Poll interval (seconds) | `poll_interval_seconds` | `CLAUDE_QUOTA_POLL_INTERVAL`      | `-poll-interval`      | `300`    |
 | Font size               | `font_size`             | `CLAUDE_QUOTA_FONT_SIZE`          | `-font-size`          | `34`     |
 | Font name               | `font_name`             | `CLAUDE_QUOTA_FONT_NAME`          | `-font-name`          | `"bold"` |
@@ -232,6 +234,11 @@ Optional. First run creates `~/.config/claude-quota/config.json`:
 
 > **Note:** When enabled, `-stats` stores quota snapshots in a local SQLite database
 > for users who want to analyse their consumption over time. Data never leaves the machine.
+
+`*_credentials` points directly at a credentials file and takes precedence over
+the corresponding `*_home` option (which derives the path by appending
+`.claude/.credentials.json` or `.codex/auth.json`). Use it when your credentials
+do not live under a standard home directory layout.
 
 `font_size` and `halo_size` are relative to the base icon size (64px). They scale
 automatically with `icon_size` — e.g. at `icon_size: 128` the rendered font is 2x larger.

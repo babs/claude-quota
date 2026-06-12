@@ -70,7 +70,9 @@ func main() {
 	showAccount := flag.Bool("show-account", false, "show account info in menu (env: CLAUDE_QUOTA_SHOW_ACCOUNT)")
 	stats := flag.Bool("stats", false, "enable local stats collection (env: CLAUDE_QUOTA_STATS)")
 	claudeHome := flag.String("claude-home", "", "home directory for Claude credentials (env: CLAUDE_QUOTA_CLAUDE_HOME)")
+	claudeCredentials := flag.String("claude-credentials", "", "direct path to Claude credentials file (env: CLAUDE_QUOTA_CLAUDE_CREDENTIALS)")
 	codexHome := flag.String("codex-home", "", "home directory for Codex credentials (env: CLAUDE_QUOTA_CODEX_HOME)")
+	codexCredentials := flag.String("codex-credentials", "", "direct path to Codex auth file (env: CLAUDE_QUOTA_CODEX_CREDENTIALS)")
 	flag.Usage = func() {
 		fmt.Print(versionStringLong())
 		fmt.Fprintf(os.Stderr, "\nUsage: %s [options]\n\nOptions:\n", os.Args[0])
@@ -90,26 +92,24 @@ func main() {
 
 	cfg := loadConfigWithMode(!*dryRun)
 
-	// Resolve provider-specific credential paths FIRST (config < env < flag),
-	// so that resolveProvider's defaultProvider() fallback stats the user's
-	// actual credential files when claude_home/codex_home are overridden.
-	if cfg.ClaudeHome != "" {
-		claudeCredentialsPath = filepath.Join(cfg.ClaudeHome, ".claude", ".credentials.json")
+	// Resolve provider-specific credential paths FIRST, so that
+	// resolveProvider's defaultProvider() fallback stats the user's actual
+	// credential files when overridden.
+	if p := resolveCredentialPath(
+		credentialSources{cfg.ClaudeHome, cfg.ClaudeCredentials},
+		credentialSources{os.Getenv("CLAUDE_QUOTA_CLAUDE_HOME"), os.Getenv("CLAUDE_QUOTA_CLAUDE_CREDENTIALS")},
+		credentialSources{*claudeHome, *claudeCredentials},
+		".claude", ".credentials.json",
+	); p != "" {
+		claudeCredentialsPath = p
 	}
-	if cfg.CodexHome != "" {
-		codexAuthPath = filepath.Join(cfg.CodexHome, ".codex", "auth.json")
-	}
-	if v := os.Getenv("CLAUDE_QUOTA_CLAUDE_HOME"); v != "" {
-		claudeCredentialsPath = filepath.Join(v, ".claude", ".credentials.json")
-	}
-	if v := os.Getenv("CLAUDE_QUOTA_CODEX_HOME"); v != "" {
-		codexAuthPath = filepath.Join(v, ".codex", "auth.json")
-	}
-	if *claudeHome != "" {
-		claudeCredentialsPath = filepath.Join(*claudeHome, ".claude", ".credentials.json")
-	}
-	if *codexHome != "" {
-		codexAuthPath = filepath.Join(*codexHome, ".codex", "auth.json")
+	if p := resolveCredentialPath(
+		credentialSources{cfg.CodexHome, cfg.CodexCredentials},
+		credentialSources{os.Getenv("CLAUDE_QUOTA_CODEX_HOME"), os.Getenv("CLAUDE_QUOTA_CODEX_CREDENTIALS")},
+		credentialSources{*codexHome, *codexCredentials},
+		".codex", "auth.json",
+	); p != "" {
+		codexAuthPath = p
 	}
 
 	provider := resolveProvider(*providerFlag, os.Getenv("CLAUDE_QUOTA_PROVIDER"), cfg.Provider)
@@ -250,6 +250,46 @@ func resolveProvider(flagVal, envVal, cfgVal string) Provider {
 		return normalizeProvider(cfgVal)
 	}
 	return defaultProvider()
+}
+
+// credentialSources holds the home-dir and direct-path overrides for a single
+// source level (config, env, or flag).
+type credentialSources struct {
+	home   string
+	direct string
+}
+
+// resolveCredentialPath picks a credential file path from two independent
+// chains, each with config < env < flag precedence:
+//   - home chain:   derives the path as filepath.Join(home, subdir, filename)
+//   - direct chain: uses the path as-is
+//
+// The direct chain always wins over the home chain regardless of source level.
+// Returns "" when no override is set (caller keeps the init() default).
+func resolveCredentialPath(cfg, env, flag credentialSources, subdir, filename string) string {
+	homePath := ""
+	if cfg.home != "" {
+		homePath = filepath.Join(cfg.home, subdir, filename)
+	}
+	if env.home != "" {
+		homePath = filepath.Join(env.home, subdir, filename)
+	}
+	if flag.home != "" {
+		homePath = filepath.Join(flag.home, subdir, filename)
+	}
+
+	directPath := cfg.direct
+	if env.direct != "" {
+		directPath = env.direct
+	}
+	if flag.direct != "" {
+		directPath = flag.direct
+	}
+
+	if directPath != "" {
+		return directPath
+	}
+	return homePath
 }
 
 // overrides holds CLI flag values for config overrides.
