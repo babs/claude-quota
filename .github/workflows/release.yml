@@ -13,12 +13,19 @@ jobs:
           - os: ubuntu-latest
           - os: macos-latest
     runs-on: ${{ matrix.os }}
+    # Least privilege: building only reads the tree; the release job below is
+    # the one that needs contents: write.
+    permissions:
+      contents: read
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
-      - uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
-          go-version: ">=1.24.0"
+          # Same as test.yml, so released binaries are built with the toolchain
+          # CI tested against — and with the latest Go security fixes, which
+          # pinning to go.mod's minimum (1.24.0) would forfeit.
+          go-version: "stable"
       - name: Build
         run: ./release.sh
       - name: Upload artifacts
@@ -38,9 +45,16 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - uses: "marvinpinto/action-automatic-releases@latest"
-        with:
-          repo_token: "${{ secrets.GITHUB_TOKEN }}"
-          prerelease: false
-          files: |
-            dist/*
+      # Was marvinpinto/action-automatic-releases@latest: archived upstream since
+      # 2024-05-05, and `latest` is its development build — unreviewable third
+      # party code running with contents: write. gh is preinstalled on GitHub
+      # runners, so this removes the dependency instead of swapping it for
+      # another one.
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --generate-notes \
+            --latest
