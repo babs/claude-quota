@@ -2,3 +2,7 @@ dist/
 claude-quota
 claude-quota.exe
 coverage*.out
+# Downloaded packages parked in the tree while debugging tray/panel behaviour —
+# multi-MB binaries that `git add -A` would otherwise commit into history.
+*.deb
+*.rpm

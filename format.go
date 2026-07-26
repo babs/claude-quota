@@ -37,27 +37,14 @@ func formatResetDate(resetTime *time.Time) string {
 	return local.Format("Mon 15:04")
 }
 
-// formatUpdatedAgo returns "Updated: Xs ago" / "Xm Ys ago" / "Xh Ym ago" for the given time.
-func formatUpdatedAgo(t *time.Time) string {
+// formatClockLine returns "<label>: HH:MM:SS" in local time, or "<label>: --"
+// when the time is unknown. Absolute (not relative) so the tray only needs to
+// refresh it on a poll, not tick every second.
+func formatClockLine(label string, t *time.Time) string {
 	if t == nil {
-		return "Updated: --"
+		return label + ": --"
 	}
-	ago := time.Since(*t)
-	if ago < 0 {
-		ago = 0
-	}
-	totalSec := int(ago.Seconds())
-	if totalSec < 60 {
-		return fmt.Sprintf("Updated: %ds ago", totalSec)
-	}
-	minutes := totalSec / 60
-	seconds := totalSec % 60
-	if minutes < 60 {
-		return fmt.Sprintf("Updated: %dm %ds ago", minutes, seconds)
-	}
-	hours := minutes / 60
-	minutes %= 60
-	return fmt.Sprintf("Updated: %dh %dm ago", hours, minutes)
+	return label + ": " + t.Local().Format("15:04:05")
 }
 
 // formatSaturationLine returns a formatted saturation line, or "" if nil.

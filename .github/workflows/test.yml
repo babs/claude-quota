@@ -1,0 +1,52 @@
+name: "Test"
+
+# release.yml only fires on v* tags and only builds, so without this workflow
+# the test suite never runs anywhere but a contributor's machine.
+on:
+  # Only the default branch on push: PR branches are already covered by
+  # pull_request, and listing both would run every PR commit twice.
+  push:
+    branches: [master]
+  pull_request:
+
+# Least privilege: nothing here writes to the repository.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Latest patched stable, deliberately not go.mod's 1.24.0: that
+          # directive is the minimum language version, and building on it would
+          # miss every toolchain security fix since. A new Go turning this red
+          # is the point — better here than at release time.
+          go-version: "stable"
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test -race ./...
+
+      # The steps below mirror .pre-commit-config.yaml so that "CI green" and
+      # "pre-commit green" mean the same thing.
+      - name: Lint (Go)
+        # v9 is the first major supporting golangci-lint v2, which .golangci.yml
+        # declares. Pinned to the minor developers run locally so a linter
+        # release cannot turn CI red on unchanged code.
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11
+      # Installed explicitly rather than relying on the runner image: shellcheck
+      # happens to be preinstalled on GitHub's ubuntu-latest, but that is not a
+      # contract, and it is absent from the act images used for local dry runs.
+      - name: Lint and test install.sh
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck bats
+          shellcheck scripts/install.sh
+          bats tests/install.bats
