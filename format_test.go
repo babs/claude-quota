@@ -51,43 +51,27 @@ func TestFormatResetDate_Format(t *testing.T) {
 	}
 }
 
-func TestFormatUpdatedAgo_Nil(t *testing.T) {
-	if got := formatUpdatedAgo(nil); got != "Updated: --" {
-		t.Errorf("formatUpdatedAgo(nil) = %q, want %q", got, "Updated: --")
-	}
-}
+func TestFormatClockLine(t *testing.T) {
+	// time.Local so .Local() is a no-op and the expectation holds on any TZ.
+	ts := time.Date(2026, 1, 2, 14, 30, 5, 0, time.Local)
 
-func TestFormatUpdatedAgo_Seconds(t *testing.T) {
-	ts := time.Now().Add(-30 * time.Second)
-	got := formatUpdatedAgo(&ts)
-	// Should be ~30s, allow some slack.
-	if got != "Updated: 30s ago" && got != "Updated: 31s ago" {
-		t.Errorf("formatUpdatedAgo(-30s) = %q", got)
+	tests := []struct {
+		name  string
+		label string
+		t     *time.Time
+		want  string
+	}{
+		{"updated time", "Updated", &ts, "Updated: 14:30:05"},
+		{"updated nil", "Updated", nil, "Updated: --"},
+		{"next update time", "Next update", &ts, "Next update: 14:30:05"},
+		{"next update nil", "Next update", nil, "Next update: --"},
 	}
-}
-
-func TestFormatUpdatedAgo_Minutes(t *testing.T) {
-	ts := time.Now().Add(-3*time.Minute - 12*time.Second)
-	got := formatUpdatedAgo(&ts)
-	if got != "Updated: 3m 12s ago" && got != "Updated: 3m 13s ago" {
-		t.Errorf("formatUpdatedAgo(-3m12s) = %q", got)
-	}
-}
-
-func TestFormatUpdatedAgo_Hours(t *testing.T) {
-	ts := time.Now().Add(-1*time.Hour - 5*time.Minute)
-	got := formatUpdatedAgo(&ts)
-	if got != "Updated: 1h 5m ago" {
-		t.Errorf("formatUpdatedAgo(-1h5m) = %q", got)
-	}
-}
-
-func TestFormatUpdatedAgo_Future(t *testing.T) {
-	ts := time.Now().Add(10 * time.Second)
-	got := formatUpdatedAgo(&ts)
-	// Negative duration is clamped to 0.
-	if got != "Updated: 0s ago" {
-		t.Errorf("formatUpdatedAgo(future) = %q, want %q", got, "Updated: 0s ago")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatClockLine(tc.label, tc.t); got != tc.want {
+				t.Errorf("formatClockLine(%q) = %q, want %q", tc.label, got, tc.want)
+			}
+		})
 	}
 }
 

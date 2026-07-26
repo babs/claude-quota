@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"image/color"
 	"log"
@@ -22,6 +23,23 @@ const (
 	updatePhaseApplied                    // "Restart to apply update"
 )
 
+// iconRepushInterval bounds how long a dropped icon/tooltip push can persist.
+// Two ways a push is lost silently: fyne.io/systray discards SetIcon/SetTooltip
+// that land between its createPropSpec() snapshot and instance.props being
+// assigned (onReady runs on its own goroutine, concurrently with that setup),
+// and some panels only repaint on the NewIcon signal after losing the pixmap.
+// Value dedup alone would leave either state stale until the quota digits move
+// — possibly overnight on an idle machine — so re-push unconditionally at this
+// cadence. Costs one D-Bus signal per interval; the churn this dedup exists to
+// kill was the old 1 Hz menu ticker, not this.
+//
+// This is a floor, not a guarantee: the check only runs inside updateUI, which
+// fires on poll or manual refresh, so the real self-heal period is
+// max(iconRepushInterval, poll_interval_seconds). A very long poll interval
+// stretches it accordingly — the alternative, a dedicated ticker, would restore
+// the background goroutine this change removed.
+const iconRepushInterval = 10 * time.Minute
+
 // App ties together config, credentials, quota client, and systray.
 type App struct {
 	config           Config
@@ -30,10 +48,28 @@ type App struct {
 	stats            *StatsStore
 	resolver         *AccountResolver
 	account          AccountInfo
-	quit             chan struct{} // closed on shutdown
-	restartRequested atomic.Bool   // set before shutdown to trigger re-exec
-	fetchMu          sync.Mutex    // serializes refreshAccount+Fetch+record across goroutines
-	uiMu             sync.Mutex    // serializes updateUI calls
+	quit             chan struct{}             // closed on shutdown
+	restartRequested atomic.Bool               // set before shutdown to trigger re-exec
+	nextUpdate       atomic.Pointer[time.Time] // when pollLoop will next fetch
+	fetchMu          sync.Mutex                // serializes refreshAccount+Fetch+record across goroutines
+	uiMu             sync.Mutex                // serializes updateUI calls
+
+	// Last values pushed to systray, to suppress redundant D-Bus signals: every
+	// setter re-emits (and the panel re-renders) even when the value is unchanged.
+	// Guarded by uiMu.
+	lastTitles  map[*systray.MenuItem]string
+	lastShown   map[*systray.MenuItem]bool
+	lastIcon    []byte
+	lastTooltip string
+	lastPush    time.Time // when icon+tooltip were last pushed unconditionally
+
+	// Indirection for the two package-level systray calls updateUI makes. Nil
+	// means "call systray" — the production path. systray keeps its state in
+	// package globals with no seam of its own, so recorders here are the only
+	// way a test can assert which pushes updateUI actually performs; without
+	// them the dedup and the iconRepushInterval self-heal are both unfalsifiable.
+	setIcon    func([]byte)
+	setTooltip func(string)
 
 	// Parsed once at construction from config.ProviderMarkColor to avoid
 	// re-parsing the hex string on every render tick. A.A == 0 means "no
@@ -57,6 +93,7 @@ type App struct {
 	mSevenDaySaturation *systray.MenuItem
 	mSevenDaySonnet     *systray.MenuItem
 	mUpdated            *systray.MenuItem
+	mNextUpdate         *systray.MenuItem
 	mStats              *systray.MenuItem
 	mRefresh            *systray.MenuItem
 	mCheckUpdate        *systray.MenuItem
@@ -138,6 +175,8 @@ func (a *App) onReady() {
 
 	a.mUpdated = systray.AddMenuItem("Updated: --", "Last update time")
 	a.mUpdated.Disable()
+	a.mNextUpdate = systray.AddMenuItem("Next update: --", "Next scheduled quota refresh")
+	a.mNextUpdate.Disable()
 	if a.stats != nil {
 		a.mStats = systray.AddMenuItem(fmt.Sprintf("Stats: %s", statsDBPath), "Stats database location")
 		a.mStats.Disable()
@@ -146,13 +185,15 @@ func (a *App) onReady() {
 	a.mCheckUpdate = systray.AddMenuItem(fmt.Sprintf("Check for Updates (current %s)", Version), "Check for a newer version")
 	a.mQuit = systray.AddMenuItem("Quit", "Quit the application")
 
-	// Initial fetch + icon update.
+	// Initial fetch + icon update. Schedule the first poll before rendering so
+	// the "Next update" line is populated from the start, and hand the deadline
+	// to pollLoop so the line and the timer cannot disagree.
 	a.fetchCycle()
+	next := a.scheduleNext(time.Duration(a.config.PollIntervalSeconds) * time.Second)
 	a.updateUI()
 
 	// Start background loops.
-	go a.pollLoop()
-	go a.updatedTicker()
+	go a.pollLoop(next)
 	go a.eventLoop()
 }
 
@@ -186,42 +227,53 @@ func (a *App) eventLoop() {
 	}
 }
 
-// pollLoop periodically fetches quota and updates the UI.
-func (a *App) pollLoop() {
+// pollLoop periodically fetches quota and updates the UI. next is the first
+// deadline, produced by onReady's scheduleNext so the "Next update" line shown
+// at startup is the one this loop actually waits on. Carrying the deadline in a
+// parameter rather than re-reading a.nextUpdate keeps it un-nil-able and leaves
+// the atomic as a one-way channel to the UI.
+func (a *App) pollLoop(next time.Time) {
 	interval := time.Duration(a.config.PollIntervalSeconds) * time.Second
 
-	// Wait first — initial fetch already happened in onReady.
-	select {
-	case <-a.quit:
-		return
-	case <-time.After(interval):
-	}
-
 	for {
-		a.fetchCycle()
-		a.updateUI()
-
+		// Wait on the stored deadline, not a fresh interval, so the "Next update"
+		// line is exact rather than optimistic by the render duration. The initial
+		// fetch already happened in onReady, so we wait before fetching.
 		select {
 		case <-a.quit:
 			return
-		case <-time.After(interval):
+		case <-time.After(time.Until(next)):
 		}
+
+		a.fetchCycle()
+		// Re-arm before rendering, otherwise updateUI would show the deadline that
+		// just fired.
+		next = a.scheduleNext(interval)
+		a.updateUI()
 	}
 }
 
-// updatedTicker refreshes the "Updated: Xs ago" menu item every 10 seconds.
-func (a *App) updatedTicker() {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-a.quit:
-			return
-		case <-ticker.C:
-			state := a.quota.State()
-			a.mUpdated.SetTitle(formatUpdatedAgo(state.LastUpdate))
-		}
+// scheduleNext records when pollLoop will next fetch, for the "Next update"
+// line, and returns that deadline. A manual Refresh does not call this, so it
+// never shifts the real schedule.
+func (a *App) scheduleNext(interval time.Duration) time.Time {
+	t := time.Now().Add(interval)
+	a.nextUpdate.Store(&t)
+	return t
+}
+
+// nextUpdateAt returns the next-fetch deadline as a wall-clock time, or nil if
+// none is scheduled. The stored deadline's wall-clock component goes stale
+// across a suspend or an NTP step, while its monotonic reading — the one
+// time.After actually waits on — does not; re-deriving from the remaining
+// monotonic duration keeps the displayed time honest in both cases.
+func (a *App) nextUpdateAt() *time.Time {
+	next := a.nextUpdate.Load()
+	if next == nil {
+		return nil
 	}
+	at := time.Now().Add(time.Until(*next))
+	return &at
 }
 
 // fetchCycle runs the full refresh-account + fetch-quota + record cycle.
@@ -286,6 +338,87 @@ func (a *App) recordError() {
 	a.stats.RecordError(state.Provider, a.account.AccountUUID, state.ErrorType, state.HTTPStatus, state.Error)
 }
 
+// cacheChanged reports whether val differs from the last value recorded for mi
+// in cache, updating the record. Pure map bookkeeping — the systray call stays
+// with the caller; generic so title (string) and visibility (bool) share one
+// gate.
+func cacheChanged[T comparable](cache map[*systray.MenuItem]T, mi *systray.MenuItem, val T) bool {
+	if prev, ok := cache[mi]; ok && prev == val {
+		return false
+	}
+	cache[mi] = val
+	return true
+}
+
+// setMenuTitle sets a menu item's title only when it changed, skipping the
+// redundant D-Bus signal otherwise. Caller must hold uiMu.
+//
+// Every title write must go through here: a raw mi.SetTitle would desync the
+// cache from the widget and make the *next* setMenuTitle swallow a real update.
+// Use setMenuTitleLocked from goroutines that don't already hold uiMu.
+func (a *App) setMenuTitle(mi *systray.MenuItem, s string) {
+	if mi == nil {
+		return
+	}
+	if a.lastTitles == nil {
+		a.lastTitles = make(map[*systray.MenuItem]string)
+	}
+	if cacheChanged(a.lastTitles, mi, s) {
+		mi.SetTitle(s)
+	}
+}
+
+// setMenuTitleLocked is setMenuTitle for callers outside updateUI.
+func (a *App) setMenuTitleLocked(mi *systray.MenuItem, s string) {
+	a.uiMu.Lock()
+	defer a.uiMu.Unlock()
+	a.setMenuTitle(mi, s)
+}
+
+// setMenuVisible shows/hides a menu item only on a visibility change, skipping
+// the redundant layout signal otherwise. Caller must hold uiMu.
+func (a *App) setMenuVisible(mi *systray.MenuItem, show bool) {
+	if mi == nil {
+		return
+	}
+	if a.lastShown == nil {
+		a.lastShown = make(map[*systray.MenuItem]bool)
+	}
+	if !cacheChanged(a.lastShown, mi, show) {
+		return
+	}
+	if show {
+		mi.Show()
+	} else {
+		mi.Hide()
+	}
+}
+
+// shouldRepush reports whether this pass must bypass the icon/tooltip dedup so
+// a silently dropped push cannot persist — see iconRepushInterval. A zero
+// lastPush forces the first pass, which is the one most likely to race systray's
+// own setup. Caller must hold uiMu.
+func (a *App) shouldRepush(now time.Time) bool {
+	return now.Sub(a.lastPush) >= iconRepushInterval
+}
+
+// pushIcon and pushTooltip send to systray unless a test substituted a recorder.
+func (a *App) pushIcon(iconData []byte) {
+	if a.setIcon != nil {
+		a.setIcon(iconData)
+		return
+	}
+	systray.SetIcon(iconData)
+}
+
+func (a *App) pushTooltip(tooltip string) {
+	if a.setTooltip != nil {
+		a.setTooltip(tooltip)
+		return
+	}
+	systray.SetTooltip(tooltip)
+}
+
 // updateUI refreshes the icon and menu items from current state.
 // Serialized via uiMu because pollLoop and eventLoop may call concurrently,
 // and the shared font.Face used during rendering is not goroutine-safe.
@@ -298,6 +431,8 @@ func (a *App) updateUI() {
 	a.uiMu.Lock()
 	defer a.uiMu.Unlock()
 	state := a.quota.State()
+
+	repush := a.shouldRepush(time.Now())
 
 	// Update icon.
 	img := renderIcon(state, a.config.Thresholds, RenderOptions{
@@ -315,72 +450,85 @@ func (a *App) updateUI() {
 	iconData, err := iconToBytes(img)
 	if err != nil {
 		log.Printf("Icon encode error: %v", err)
-	} else {
-		systray.SetIcon(iconData)
+		// Mark the icon dirty so the first successful encode pushes even if it
+		// produces the same bytes as the last one that made it out. Gating
+		// lastPush on the push succeeding instead would pin repush to true and
+		// re-emit the tooltip on every single pass.
+		a.lastIcon = nil
+	} else if repush || !bytes.Equal(iconData, a.lastIcon) {
+		a.lastIcon = iconData
+		a.pushIcon(iconData)
 	}
 
 	// Update tooltip.
-	systray.SetTooltip(buildTooltip(state, a.creds.Provider()))
+	if tooltip := buildTooltip(state, a.creds.Provider()); repush || tooltip != a.lastTooltip {
+		a.lastTooltip = tooltip
+		a.pushTooltip(tooltip)
+	}
+	if repush {
+		a.lastPush = time.Now()
+	}
 
 	// Update menu items.
 	if a.mAccountEmail != nil {
 		if account.EmailAddress != "" {
-			a.mAccountEmail.SetTitle("Acct: " + account.EmailAddress)
-			a.mAccountEmail.Show()
+			a.setMenuTitle(a.mAccountEmail, "Acct: "+account.EmailAddress)
+			a.setMenuVisible(a.mAccountEmail, true)
 		} else {
-			a.mAccountEmail.Hide()
+			a.setMenuVisible(a.mAccountEmail, false)
 		}
 	}
 	if a.mAccountOrg != nil {
 		if account.OrganizationName != "" {
-			a.mAccountOrg.SetTitle("Org: " + account.OrganizationName)
-			a.mAccountOrg.Show()
+			a.setMenuTitle(a.mAccountOrg, "Org: "+account.OrganizationName)
+			a.setMenuVisible(a.mAccountOrg, true)
 		} else {
-			a.mAccountOrg.Hide()
+			a.setMenuVisible(a.mAccountOrg, false)
 		}
 	}
 	if a.mProvider != nil {
-		a.mProvider.SetTitle(fmt.Sprintf("Provider: %s", providerDisplayName(state.Provider)))
+		a.setMenuTitle(a.mProvider, fmt.Sprintf("Provider: %s", providerDisplayName(state.Provider)))
 	}
-	a.mFiveHour.SetTitle(formatQuotaLine("5h", state.FiveHour, state.FiveHourResets))
+	a.setMenuTitle(a.mFiveHour, formatQuotaLine("5h", state.FiveHour, state.FiveHourResets))
 	if state.FiveHour != nil {
 		if projLine := formatProjectionLine(state.FiveHourProjected); projLine != "" {
-			a.mProjection.SetTitle(projLine)
-			a.mProjection.Show()
+			a.setMenuTitle(a.mProjection, projLine)
+			a.setMenuVisible(a.mProjection, true)
 		} else {
-			a.mProjection.Hide()
+			a.setMenuVisible(a.mProjection, false)
 		}
 		if satLine := formatSaturationLine(state.FiveHourSaturation); satLine != "" {
-			a.mSaturation.SetTitle(satLine)
-			a.mSaturation.Show()
+			a.setMenuTitle(a.mSaturation, satLine)
+			a.setMenuVisible(a.mSaturation, true)
 		} else {
-			a.mSaturation.Hide()
+			a.setMenuVisible(a.mSaturation, false)
 		}
 	} else {
-		a.mProjection.Hide()
-		a.mSaturation.Hide()
+		a.setMenuVisible(a.mProjection, false)
+		a.setMenuVisible(a.mSaturation, false)
 	}
-	a.mSevenDay.SetTitle(formatQuotaLine("7d", state.SevenDay, state.SevenDayResets))
+	a.setMenuTitle(a.mSevenDay, formatQuotaLine("7d", state.SevenDay, state.SevenDayResets))
 	if state.SevenDay != nil {
 		if projLine := formatProjectionLine(state.SevenDayProjected); projLine != "" {
-			a.mSevenDayProjection.SetTitle(projLine)
-			a.mSevenDayProjection.Show()
+			a.setMenuTitle(a.mSevenDayProjection, projLine)
+			a.setMenuVisible(a.mSevenDayProjection, true)
 		} else {
-			a.mSevenDayProjection.Hide()
+			a.setMenuVisible(a.mSevenDayProjection, false)
 		}
 		if satLine := formatSaturationLine(state.SevenDaySaturation); satLine != "" {
-			a.mSevenDaySaturation.SetTitle(satLine)
-			a.mSevenDaySaturation.Show()
+			a.setMenuTitle(a.mSevenDaySaturation, satLine)
+			a.setMenuVisible(a.mSevenDaySaturation, true)
 		} else {
-			a.mSevenDaySaturation.Hide()
+			a.setMenuVisible(a.mSevenDaySaturation, false)
 		}
 	} else {
-		a.mSevenDayProjection.Hide()
-		a.mSevenDaySaturation.Hide()
+		a.setMenuVisible(a.mSevenDayProjection, false)
+		a.setMenuVisible(a.mSevenDaySaturation, false)
 	}
-	a.mSevenDaySonnet.SetTitle(formatQuotaLine(extraQuotaLabel(state), state.SevenDaySonnet, state.SevenDaySonnetResets))
+	a.setMenuTitle(a.mSevenDaySonnet, formatQuotaLine(extraQuotaLabel(state), state.SevenDaySonnet, state.SevenDaySonnetResets))
 
-	a.mUpdated.SetTitle(formatUpdatedAgo(state.LastUpdate))
+	a.setMenuTitle(a.mUpdated, formatClockLine("Updated", state.LastUpdate))
+	a.setMenuTitle(a.mNextUpdate, formatClockLine("Next update", a.nextUpdateAt()))
 }
 
 // handleUpdateClick dispatches the click based on current update phase.
@@ -396,7 +544,7 @@ func (a *App) handleUpdateClick() {
 	case updatePhaseReady:
 		a.doApplyUpdate(version)
 	case updatePhaseApplied:
-		a.mCheckUpdate.SetTitle("Restarting...")
+		a.setMenuTitleLocked(a.mCheckUpdate, "Restarting...")
 		a.mCheckUpdate.Disable()
 		a.restartRequested.Store(true)
 		a.Shutdown()
@@ -405,7 +553,7 @@ func (a *App) handleUpdateClick() {
 
 // doUpdateCheck checks GitHub for a newer version and updates the menu.
 func (a *App) doUpdateCheck() {
-	a.mCheckUpdate.SetTitle("Checking...")
+	a.setMenuTitleLocked(a.mCheckUpdate, "Checking...")
 	a.mCheckUpdate.Disable()
 	go func() {
 		defer a.mCheckUpdate.Enable()
@@ -414,7 +562,7 @@ func (a *App) doUpdateCheck() {
 		latest, err := fetchLatestVersion()
 		if err != nil {
 			log.Printf("Update check failed: %v", err)
-			a.mCheckUpdate.SetTitle(fmt.Sprintf("Update check failed: %v", err))
+			a.setMenuTitleLocked(a.mCheckUpdate, fmt.Sprintf("Update check failed: %v", err))
 			return
 		}
 
@@ -425,25 +573,25 @@ func (a *App) doUpdateCheck() {
 			a.updateVersion = latest
 			a.updatePhase = updatePhaseReady
 			a.updateMu.Unlock()
-			a.mCheckUpdate.SetTitle(fmt.Sprintf("Update available: %s (current: %s)", latest, Version))
+			a.setMenuTitleLocked(a.mCheckUpdate, fmt.Sprintf("Update available: %s (current: %s)", latest, Version))
 		case -1:
 			log.Printf("Newer than latest release (%s)", latest)
-			a.mCheckUpdate.SetTitle(fmt.Sprintf("Newer than latest release (%s)", latest))
+			a.setMenuTitleLocked(a.mCheckUpdate, fmt.Sprintf("Newer than latest release (%s)", latest))
 		default:
 			log.Printf("Up to date (%s)", Version)
-			a.mCheckUpdate.SetTitle(fmt.Sprintf("Up to date (%s)", Version))
+			a.setMenuTitleLocked(a.mCheckUpdate, fmt.Sprintf("Up to date (%s)", Version))
 		}
 	}()
 }
 
 // doApplyUpdate downloads and applies the given version.
 func (a *App) doApplyUpdate(version string) {
-	a.mCheckUpdate.SetTitle(fmt.Sprintf("Updating to %s...", version))
+	a.setMenuTitleLocked(a.mCheckUpdate, fmt.Sprintf("Updating to %s...", version))
 	a.mCheckUpdate.Disable()
 	go func() {
 		if err := applyUpdate(version); err != nil {
 			log.Printf("Update error: %v", err)
-			a.mCheckUpdate.SetTitle(fmt.Sprintf("Update failed: %v", err))
+			a.setMenuTitleLocked(a.mCheckUpdate, fmt.Sprintf("Update failed: %v", err))
 			// Reset to ready so user can retry.
 			a.updateMu.Lock()
 			a.updatePhase = updatePhaseReady
@@ -454,7 +602,7 @@ func (a *App) doApplyUpdate(version string) {
 		a.updateMu.Lock()
 		a.updatePhase = updatePhaseApplied
 		a.updateMu.Unlock()
-		a.mCheckUpdate.SetTitle("Restart to apply update")
+		a.setMenuTitleLocked(a.mCheckUpdate, "Restart to apply update")
 		a.mCheckUpdate.Enable()
 	}()
 }
@@ -490,8 +638,7 @@ func buildTooltip(state QuotaState, provider Provider) string {
 	}
 
 	if state.LastUpdate != nil {
-		local := state.LastUpdate.Local()
-		lines += fmt.Sprintf("\nUpdated: %s", local.Format("15:04:05"))
+		lines += "\n" + formatClockLine("Updated", state.LastUpdate)
 	}
 
 	return lines
