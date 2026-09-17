@@ -82,22 +82,24 @@ type App struct {
 	updatePhase   updatePhase
 
 	// Menu items updated dynamically.
-	mAccountEmail       *systray.MenuItem
-	mAccountOrg         *systray.MenuItem
-	mProvider           *systray.MenuItem
-	mFiveHour           *systray.MenuItem
-	mProjection         *systray.MenuItem
-	mSaturation         *systray.MenuItem
-	mSevenDay           *systray.MenuItem
-	mSevenDayProjection *systray.MenuItem
-	mSevenDaySaturation *systray.MenuItem
-	mSevenDaySonnet     *systray.MenuItem
-	mUpdated            *systray.MenuItem
-	mNextUpdate         *systray.MenuItem
-	mStats              *systray.MenuItem
-	mRefresh            *systray.MenuItem
-	mCheckUpdate        *systray.MenuItem
-	mQuit               *systray.MenuItem
+	mAccountEmail             *systray.MenuItem
+	mAccountOrg               *systray.MenuItem
+	mProvider                 *systray.MenuItem
+	mFiveHour                 *systray.MenuItem
+	mProjection               *systray.MenuItem
+	mSaturation               *systray.MenuItem
+	mSevenDay                 *systray.MenuItem
+	mSevenDayProjection       *systray.MenuItem
+	mSevenDaySaturation       *systray.MenuItem
+	mSevenDaySonnet           *systray.MenuItem
+	mSevenDaySonnetProjection *systray.MenuItem
+	mSevenDaySonnetSaturation *systray.MenuItem
+	mUpdated                  *systray.MenuItem
+	mNextUpdate               *systray.MenuItem
+	mStats                    *systray.MenuItem
+	mRefresh                  *systray.MenuItem
+	mCheckUpdate              *systray.MenuItem
+	mQuit                     *systray.MenuItem
 }
 
 // NewApp creates an App from the given config and credentials.
@@ -152,7 +154,7 @@ func (a *App) onReady() {
 	}
 	a.mProvider = systray.AddMenuItem(fmt.Sprintf("Provider: %s", providerDisplayName(a.creds.Provider())), "Active quota provider")
 	a.mProvider.Disable()
-	a.mFiveHour = systray.AddMenuItem("5h: --", "5-hour quota")
+	a.mFiveHour = systray.AddMenuItem("5h: --", "Primary quota window")
 	a.mFiveHour.Disable()
 	a.mProjection = systray.AddMenuItem("", "Projected utilization at reset")
 	a.mProjection.Disable()
@@ -160,7 +162,7 @@ func (a *App) onReady() {
 	a.mSaturation = systray.AddMenuItem("", "Projected saturation time")
 	a.mSaturation.Disable()
 	a.mSaturation.Hide()
-	a.mSevenDay = systray.AddMenuItem("7d: --", "7-day quota")
+	a.mSevenDay = systray.AddMenuItem("7d: --", "Secondary quota window")
 	a.mSevenDay.Disable()
 	a.mSevenDayProjection = systray.AddMenuItem("", "Projected 7d utilization at reset")
 	a.mSevenDayProjection.Disable()
@@ -170,6 +172,12 @@ func (a *App) onReady() {
 	a.mSevenDaySaturation.Hide()
 	a.mSevenDaySonnet = systray.AddMenuItem(extraQuotaLabel(QuotaState{Provider: a.creds.Provider()})+": --", "Additional quota bucket")
 	a.mSevenDaySonnet.Disable()
+	a.mSevenDaySonnetProjection = systray.AddMenuItem("", "Projected additional bucket utilization at reset")
+	a.mSevenDaySonnetProjection.Disable()
+	a.mSevenDaySonnetProjection.Hide()
+	a.mSevenDaySonnetSaturation = systray.AddMenuItem("", "Projected additional bucket saturation time")
+	a.mSevenDaySonnetSaturation.Disable()
+	a.mSevenDaySonnetSaturation.Hide()
 
 	systray.AddSeparator()
 
@@ -489,7 +497,7 @@ func (a *App) updateUI() {
 	if a.mProvider != nil {
 		a.setMenuTitle(a.mProvider, fmt.Sprintf("Provider: %s", providerDisplayName(state.Provider)))
 	}
-	a.setMenuTitle(a.mFiveHour, formatQuotaLine("5h", state.FiveHour, state.FiveHourResets))
+	a.setMenuTitle(a.mFiveHour, formatQuotaLine(primaryLabel(state), state.FiveHour, state.FiveHourResets))
 	if state.FiveHour != nil {
 		if projLine := formatProjectionLine(state.FiveHourProjected); projLine != "" {
 			a.setMenuTitle(a.mProjection, projLine)
@@ -507,7 +515,8 @@ func (a *App) updateUI() {
 		a.setMenuVisible(a.mProjection, false)
 		a.setMenuVisible(a.mSaturation, false)
 	}
-	a.setMenuTitle(a.mSevenDay, formatQuotaLine("7d", state.SevenDay, state.SevenDayResets))
+	a.setMenuVisible(a.mSevenDay, hasSecondary(state))
+	a.setMenuTitle(a.mSevenDay, formatQuotaLine(secondaryLabel(state), state.SevenDay, state.SevenDayResets))
 	if state.SevenDay != nil {
 		if projLine := formatProjectionLine(state.SevenDayProjected); projLine != "" {
 			a.setMenuTitle(a.mSevenDayProjection, projLine)
@@ -526,6 +535,18 @@ func (a *App) updateUI() {
 		a.setMenuVisible(a.mSevenDaySaturation, false)
 	}
 	a.setMenuTitle(a.mSevenDaySonnet, formatQuotaLine(extraQuotaLabel(state), state.SevenDaySonnet, state.SevenDaySonnetResets))
+	if projLine := formatProjectionLine(state.SevenDaySonnetProjected); projLine != "" {
+		a.setMenuTitle(a.mSevenDaySonnetProjection, projLine)
+		a.setMenuVisible(a.mSevenDaySonnetProjection, true)
+	} else {
+		a.setMenuVisible(a.mSevenDaySonnetProjection, false)
+	}
+	if satLine := formatSaturationLine(state.SevenDaySonnetSaturation); satLine != "" {
+		a.setMenuTitle(a.mSevenDaySonnetSaturation, satLine)
+		a.setMenuVisible(a.mSevenDaySonnetSaturation, true)
+	} else {
+		a.setMenuVisible(a.mSevenDaySonnetSaturation, false)
+	}
 
 	a.setMenuTitle(a.mUpdated, formatClockLine("Updated", state.LastUpdate))
 	a.setMenuTitle(a.mNextUpdate, formatClockLine("Next update", a.nextUpdateAt()))
@@ -615,7 +636,7 @@ func buildTooltip(state QuotaState, provider Provider) string {
 		lines += "\nError: " + state.Error
 	} else {
 		if state.FiveHour != nil {
-			lines += "\n" + formatQuotaLine("5h", state.FiveHour, state.FiveHourResets)
+			lines += "\n" + formatQuotaLine(primaryLabel(state), state.FiveHour, state.FiveHourResets)
 			if state.FiveHourProjected != nil {
 				lines += "\n" + formatProjectionLine(state.FiveHourProjected)
 			}
@@ -624,7 +645,7 @@ func buildTooltip(state QuotaState, provider Provider) string {
 			}
 		}
 		if state.SevenDay != nil {
-			lines += "\n" + formatQuotaLine("7d", state.SevenDay, state.SevenDayResets)
+			lines += "\n" + formatQuotaLine(secondaryLabel(state), state.SevenDay, state.SevenDayResets)
 			if state.SevenDayProjected != nil {
 				lines += "\n" + formatProjectionLine(state.SevenDayProjected)
 			}
@@ -634,6 +655,12 @@ func buildTooltip(state QuotaState, provider Provider) string {
 		}
 		if state.SevenDaySonnet != nil {
 			lines += "\n" + formatQuotaLine(extraQuotaLabel(state), state.SevenDaySonnet, state.SevenDaySonnetResets)
+			if state.SevenDaySonnetProjected != nil {
+				lines += "\n" + formatProjectionLine(state.SevenDaySonnetProjected)
+			}
+			if state.SevenDaySonnetSaturation != nil {
+				lines += "\n" + formatSaturationLine(state.SevenDaySonnetSaturation)
+			}
 		}
 	}
 

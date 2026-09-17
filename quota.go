@@ -30,24 +30,28 @@ const (
 
 // QuotaState holds the current quota snapshot.
 type QuotaState struct {
-	Provider             Provider
-	FiveHour             *float64
-	FiveHourResets       *time.Time
-	FiveHourProjected    *float64   // projected 5h utilization at window reset
-	FiveHourSaturation   *time.Time // projected time when 5h quota hits 100%
-	SevenDay             *float64
-	SevenDayResets       *time.Time
-	SevenDayProjected    *float64   // projected 7d utilization at window reset
-	SevenDaySaturation   *time.Time // projected time when 7d quota hits 100%
-	SevenDaySonnet       *float64
-	SevenDaySonnetResets *time.Time
-	SevenDaySonnetLabel  string
-	AccountEmail         string // populated from Codex usage response
-	LastUpdate           *time.Time
-	Error                string
-	ErrorType            string // credential, http, network, parse
-	HTTPStatus           int    // HTTP status code when ErrorType is "http"
-	TokenExpired         bool
+	Provider                 Provider
+	FiveHour                 *float64
+	FiveHourResets           *time.Time
+	FiveHourProjected        *float64      // projected 5h utilization at window reset
+	FiveHourSaturation       *time.Time    // projected time when 5h quota hits 100%
+	FiveHourWindow           time.Duration // actual primary window; Codex reports it, Claude assumes 5h
+	SevenDay                 *float64
+	SevenDayResets           *time.Time
+	SevenDayProjected        *float64      // projected 7d utilization at window reset
+	SevenDaySaturation       *time.Time    // projected time when 7d quota hits 100%
+	SevenDayWindow           time.Duration // actual secondary window; Codex reports it, Claude assumes 7d
+	SevenDaySonnet           *float64
+	SevenDaySonnetResets     *time.Time
+	SevenDaySonnetLabel      string
+	SevenDaySonnetProjected  *float64   // projected third-slot utilization at window reset
+	SevenDaySonnetSaturation *time.Time // projected time when third-slot quota hits 100%
+	AccountEmail             string     // populated from Codex usage response
+	LastUpdate               *time.Time
+	Error                    string
+	ErrorType                string // credential, http, network, parse
+	HTTPStatus               int    // HTTP status code when ErrorType is "http"
+	TokenExpired             bool
 }
 
 // usageResponse matches the JSON returned by the usage API.
@@ -55,6 +59,21 @@ type usageResponse struct {
 	FiveHour       *usageBucket `json:"five_hour"`
 	SevenDay       *usageBucket `json:"seven_day"`
 	SevenDaySonnet *usageBucket `json:"seven_day_sonnet"`
+	Limits         []usageLimit `json:"limits"`
+}
+
+// usageLimit is one entry of the "limits" array. The per-model weekly bucket
+// (kind "weekly_scoped") has no stable top-level key in the response, so this
+// array is the only place to read it from.
+type usageLimit struct {
+	Kind     string   `json:"kind"`
+	Percent  *float64 `json:"percent"`
+	ResetsAt *string  `json:"resets_at"`
+	Scope    *struct {
+		Model *struct {
+			DisplayName string `json:"display_name"`
+		} `json:"model"`
+	} `json:"scope"`
 }
 
 type usageBucket struct {
@@ -222,10 +241,12 @@ func buildClaudeState(data usageResponse) QuotaState {
 	parseBucket(data.SevenDay, &newState.SevenDay, &newState.SevenDayResets)
 	parseBucket(data.SevenDaySonnet, &newState.SevenDaySonnet, &newState.SevenDaySonnetResets)
 	newState.SevenDaySonnetLabel = "Sonnet 7d"
+	parseScopedWeeklyLimit(data.Limits, &newState)
 
+	newState.FiveHourWindow, newState.SevenDayWindow = fiveHourWindow, sevenDayWindow
 	now := time.Now().UTC()
 	newState.LastUpdate = &now
-	populateWindowForecasts(&newState, now, fiveHourWindow, sevenDayWindow)
+	populateWindowForecasts(&newState, now, fiveHourWindow, sevenDayWindow, sevenDayWindow)
 	return newState
 }
 
@@ -255,22 +276,24 @@ func buildCodexState(data codexUsageResponse) QuotaState {
 			}
 			if newState.SevenDaySonnet != nil {
 				if extra.Title != "" {
-					newState.SevenDaySonnetLabel = extra.Title
+					newState.SevenDaySonnetLabel = truncate(extra.Title, maxLabelRunes)
 				} else if extra.Name != "" {
-					newState.SevenDaySonnetLabel = extra.Name
+					newState.SevenDaySonnetLabel = truncate(extra.Name, maxLabelRunes)
 				}
 				break
 			}
 		}
 	}
 
+	newState.FiveHourWindow, newState.SevenDayWindow = fiveHourWindowDuration, sevenDayWindowDuration
 	now := time.Now().UTC()
 	newState.LastUpdate = &now
-	populateWindowForecasts(&newState, now, fiveHourWindowDuration, sevenDayWindowDuration)
+	// Codex third slot (code review / extra limits) has no known window: no projection.
+	populateWindowForecasts(&newState, now, fiveHourWindowDuration, sevenDayWindowDuration, 0)
 	return newState
 }
 
-func populateWindowForecasts(state *QuotaState, now time.Time, fiveWindow, sevenWindow time.Duration) {
+func populateWindowForecasts(state *QuotaState, now time.Time, fiveWindow, sevenWindow, extraWindow time.Duration) {
 	if state.FiveHour != nil && state.FiveHourResets != nil {
 		state.FiveHourProjected = computeProjection(*state.FiveHour, *state.FiveHourResets, now, fiveWindow)
 	}
@@ -282,6 +305,12 @@ func populateWindowForecasts(state *QuotaState, now time.Time, fiveWindow, seven
 	}
 	if state.SevenDayProjected != nil && *state.SevenDayProjected > 100 {
 		state.SevenDaySaturation = computeSaturationTime(*state.SevenDay, *state.SevenDayResets, now, sevenWindow)
+	}
+	if state.SevenDaySonnet != nil && state.SevenDaySonnetResets != nil {
+		state.SevenDaySonnetProjected = computeProjection(*state.SevenDaySonnet, *state.SevenDaySonnetResets, now, extraWindow)
+	}
+	if state.SevenDaySonnetProjected != nil && *state.SevenDaySonnetProjected > 100 {
+		state.SevenDaySonnetSaturation = computeSaturationTime(*state.SevenDaySonnet, *state.SevenDaySonnetResets, now, extraWindow)
 	}
 }
 
@@ -300,6 +329,27 @@ func (qc *QuotaClient) setErrorTyped(msg, errType string, httpStatus int) {
 // setError resets state to an error-only snapshot (untyped, for backward compat).
 func (qc *QuotaClient) setError(msg string) {
 	qc.setErrorTyped(msg, "", 0)
+}
+
+// maxLabelRunes bounds API-supplied bucket names before they reach the tray.
+const maxLabelRunes = 24
+
+// parseScopedWeeklyLimit overrides the third quota slot with the first
+// "weekly_scoped" limit (per-model weekly cap, e.g. Fable) when present.
+// ponytail: one slot, so a second scoped model is dropped; grow QuotaState if that shows up.
+func parseScopedWeeklyLimit(limits []usageLimit, state *QuotaState) {
+	for _, l := range limits {
+		if l.Kind != "weekly_scoped" || l.Percent == nil {
+			continue
+		}
+		state.SevenDaySonnet, state.SevenDaySonnetResets = nil, nil
+		parseBucket(&usageBucket{Utilization: l.Percent, ResetsAt: l.ResetsAt}, &state.SevenDaySonnet, &state.SevenDaySonnetResets)
+		state.SevenDaySonnetLabel = "Model 7d"
+		if l.Scope != nil && l.Scope.Model != nil && l.Scope.Model.DisplayName != "" {
+			state.SevenDaySonnetLabel = truncate(l.Scope.Model.DisplayName, maxLabelRunes) + " 7d"
+		}
+		return
+	}
 }
 
 // parseBucket extracts utilization and reset time from an API bucket.
