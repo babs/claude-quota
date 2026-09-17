@@ -40,7 +40,7 @@ jobs:
         # release cannot turn CI red on unchanged code.
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.11
+          version: v2.13
       # Installed explicitly rather than relying on the runner image: shellcheck
       # happens to be preinstalled on GitHub's ubuntu-latest, but that is not a
       # contract, and it is absent from the act images used for local dry runs.
