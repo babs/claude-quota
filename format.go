@@ -65,6 +65,31 @@ func formatProjectionLine(projected *float64) string {
 	return fmt.Sprintf("  - projected ~%.0f%% at reset", *projected)
 }
 
+// windowLabel renders a quota window as "5h" / "7d"; zero falls back to the
+// assumed label so older snapshots and tests keep their wording.
+func windowLabel(d time.Duration, fallback string) string {
+	switch {
+	case d <= 0:
+		return fallback
+	case d%(24*time.Hour) == 0:
+		return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
+	case d%time.Hour == 0:
+		return fmt.Sprintf("%dh", int(d/time.Hour))
+	default:
+		return d.String()
+	}
+}
+
+func primaryLabel(state QuotaState) string   { return windowLabel(state.FiveHourWindow, "5h") }
+func secondaryLabel(state QuotaState) string { return windowLabel(state.SevenDayWindow, "7d") }
+
+// hasSecondary reports whether the secondary row should be shown: hidden only
+// when the provider returned a primary bucket without a secondary one (Codex
+// plans with a single weekly window).
+func hasSecondary(state QuotaState) bool {
+	return state.SevenDay != nil || state.FiveHour == nil
+}
+
 // formatQuotaLine formats a single quota line with remaining time and date.
 func formatQuotaLine(label string, utilization *float64, resets *time.Time) string {
 	if utilization == nil {
@@ -88,7 +113,7 @@ func formatDryRunSummary(provider Provider, credentialsPath string, state QuotaS
 		return strings.Join(lines, "\n")
 	}
 
-	lines = append(lines, formatQuotaLine("5h", state.FiveHour, state.FiveHourResets))
+	lines = append(lines, formatQuotaLine(primaryLabel(state), state.FiveHour, state.FiveHourResets))
 	if line := formatProjectionLine(state.FiveHourProjected); line != "" {
 		lines = append(lines, strings.TrimSpace(line))
 	}
@@ -96,16 +121,24 @@ func formatDryRunSummary(provider Provider, credentialsPath string, state QuotaS
 		lines = append(lines, strings.TrimSpace(line))
 	}
 
-	lines = append(lines, formatQuotaLine("7d", state.SevenDay, state.SevenDayResets))
-	if line := formatProjectionLine(state.SevenDayProjected); line != "" {
-		lines = append(lines, strings.TrimSpace(line))
-	}
-	if line := formatSaturationLine(state.SevenDaySaturation); line != "" {
-		lines = append(lines, strings.TrimSpace(line))
+	if hasSecondary(state) {
+		lines = append(lines, formatQuotaLine(secondaryLabel(state), state.SevenDay, state.SevenDayResets))
+		if line := formatProjectionLine(state.SevenDayProjected); line != "" {
+			lines = append(lines, strings.TrimSpace(line))
+		}
+		if line := formatSaturationLine(state.SevenDaySaturation); line != "" {
+			lines = append(lines, strings.TrimSpace(line))
+		}
 	}
 
 	if state.SevenDaySonnet != nil {
 		lines = append(lines, formatQuotaLine(extraQuotaLabel(state), state.SevenDaySonnet, state.SevenDaySonnetResets))
+		if line := formatProjectionLine(state.SevenDaySonnetProjected); line != "" {
+			lines = append(lines, strings.TrimSpace(line))
+		}
+		if line := formatSaturationLine(state.SevenDaySonnetSaturation); line != "" {
+			lines = append(lines, strings.TrimSpace(line))
+		}
 	}
 	if state.LastUpdate != nil {
 		lines = append(lines, fmt.Sprintf("Updated: %s", state.LastUpdate.Local().Format(time.RFC3339)))

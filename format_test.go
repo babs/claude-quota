@@ -213,3 +213,34 @@ func TestFormatDryRunSummary_WithProjectionAndSonnet(t *testing.T) {
 		t.Fatalf("missing sonnet line: %q", got)
 	}
 }
+
+func TestWindowLabel(t *testing.T) {
+	tests := []struct {
+		d        time.Duration
+		fallback string
+		want     string
+	}{
+		{0, "5h", "5h"},
+		{5 * time.Hour, "7d", "5h"},
+		{604800 * time.Second, "5h", "7d"},
+		{24 * time.Hour, "5h", "1d"},
+		{90 * time.Minute, "5h", "1h30m0s"},
+	}
+	for _, tt := range tests {
+		if got := windowLabel(tt.d, tt.fallback); got != tt.want {
+			t.Errorf("windowLabel(%v, %q) = %q, want %q", tt.d, tt.fallback, got, tt.want)
+		}
+	}
+}
+
+func TestFormatDryRunSummary_CodexWeeklyPrimaryOnly(t *testing.T) {
+	pct := 11.0
+	state := QuotaState{Provider: ProviderCodex, FiveHour: &pct, FiveHourWindow: 7 * 24 * time.Hour}
+	got := formatDryRunSummary(ProviderCodex, "/x", state)
+	if !strings.Contains(got, "7d: 11%") {
+		t.Errorf("primary should be labelled by its window: %q", got)
+	}
+	if strings.Contains(got, "5h") || strings.Contains(got, "7d: --") {
+		t.Errorf("no 5h label and no empty secondary row expected: %q", got)
+	}
+}

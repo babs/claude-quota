@@ -15,11 +15,11 @@ color-coded icon with live quota percentages. Multiple indicator styles availabl
 
 ## Features
 
-- Claude: 5-hour, 7-day, and Sonnet 7-day quota tracking
+- Claude: 5-hour, 7-day, and per-model 7-day (Sonnet, Fable, ...) quota tracking
 - Codex: primary and secondary usage windows from `backend-api/wham/usage`
 - Color-coded icon: green (<80%), yellow (80-95%), red (>=95%); projected uses muted green (<95%), yellow (95-110%), red (>=110%)
 - Multiple indicator styles: pie chart, bar, arc, bar with projection
-- Burn-rate projection: estimates 5h utilization at window reset
+- Burn-rate projection: estimates utilization at reset for each quota window
 - Optional text overlay toggle (`show_text`)
 - Configurable icon size for HiDPI displays
 - Reloads OAuth token from disk when expired (relies on `claude login`)

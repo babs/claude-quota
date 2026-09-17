@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -890,5 +892,128 @@ func TestSetErrorTyped_IncludesProvider(t *testing.T) {
 	}
 	if state.Error != "boom" {
 		t.Fatalf("Error = %q, want boom", state.Error)
+	}
+}
+
+func TestBuildClaudeState_ScopedWeeklyLimit(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		wantUtil  float64
+		wantLabel string
+		wantReset bool
+	}{
+		{
+			name: "fable scoped limit overrides sonnet bucket",
+			body: `{"seven_day_sonnet": {"utilization": 10.0},
+				"limits": [
+					{"kind": "weekly_all", "percent": 12, "resets_at": "2099-01-01T00:00:00+00:00"},
+					{"kind": "weekly_scoped", "percent": 22, "resets_at": "2099-01-02T15:00:00.734450+00:00",
+					 "scope": {"model": {"id": null, "display_name": "Fable"}}}
+				]}`,
+			wantUtil: 22, wantLabel: "Fable 7d", wantReset: true,
+		},
+		{
+			name:     "no scoped limit keeps sonnet bucket",
+			body:     `{"seven_day_sonnet": {"utilization": 10.0}, "limits": [{"kind": "session", "percent": 3}]}`,
+			wantUtil: 10, wantLabel: "Sonnet 7d",
+		},
+		{
+			name:     "scoped limit without model name gets generic label",
+			body:     `{"limits": [{"kind": "weekly_scoped", "percent": 5, "scope": {"model": null}}]}`,
+			wantUtil: 5, wantLabel: "Model 7d",
+		},
+		{
+			name:     "scoped limit without percent is ignored",
+			body:     `{"seven_day_sonnet": {"utilization": 10.0}, "limits": [{"kind": "weekly_scoped", "scope": {"model": {"display_name": "Fable"}}}]}`,
+			wantUtil: 10, wantLabel: "Sonnet 7d",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var data usageResponse
+			if err := json.Unmarshal([]byte(tt.body), &data); err != nil {
+				t.Fatal(err)
+			}
+			state := buildClaudeState(data)
+			if state.SevenDaySonnet == nil || *state.SevenDaySonnet != tt.wantUtil {
+				t.Fatalf("SevenDaySonnet = %v, want %v", state.SevenDaySonnet, tt.wantUtil)
+			}
+			if state.SevenDaySonnetLabel != tt.wantLabel {
+				t.Fatalf("SevenDaySonnetLabel = %q, want %q", state.SevenDaySonnetLabel, tt.wantLabel)
+			}
+			if (state.SevenDaySonnetResets != nil) != tt.wantReset {
+				t.Fatalf("SevenDaySonnetResets = %v, wantReset %v", state.SevenDaySonnetResets, tt.wantReset)
+			}
+		})
+	}
+}
+
+func TestPopulateWindowForecasts_ExtraSlot(t *testing.T) {
+	now := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
+	util := 50.0
+	resets := now.Add(3 * 24 * time.Hour) // 4 of 7 days elapsed -> 50*7/4 = 87.5
+	sat := 80.0                           // 80*7/4 = 140 -> saturates before reset
+
+	tests := []struct {
+		name      string
+		util      float64
+		window    time.Duration
+		wantProj  *float64
+		wantSatur bool
+	}{
+		{"claude 7d window projects", util, sevenDayWindow, ptrF(87.5), false},
+		{"claude saturating slot gets saturation time", sat, sevenDayWindow, ptrF(140), true},
+		{"codex unknown window skips projection", util, 0, nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := tt.util
+			state := QuotaState{SevenDaySonnet: &u, SevenDaySonnetResets: &resets}
+			populateWindowForecasts(&state, now, fiveHourWindow, sevenDayWindow, tt.window)
+			switch {
+			case tt.wantProj == nil && state.SevenDaySonnetProjected != nil:
+				t.Fatalf("SevenDaySonnetProjected = %v, want nil", *state.SevenDaySonnetProjected)
+			case tt.wantProj != nil && (state.SevenDaySonnetProjected == nil || *state.SevenDaySonnetProjected != *tt.wantProj):
+				t.Fatalf("SevenDaySonnetProjected = %v, want %v", state.SevenDaySonnetProjected, *tt.wantProj)
+			}
+			if (state.SevenDaySonnetSaturation != nil) != tt.wantSatur {
+				t.Fatalf("SevenDaySonnetSaturation = %v, wantSatur %v", state.SevenDaySonnetSaturation, tt.wantSatur)
+			}
+		})
+	}
+}
+
+func ptrF(v float64) *float64 { return &v }
+
+func TestBuildCodexState_WeeklyPrimaryOnly(t *testing.T) {
+	pct := 11.0
+	resetAt := int64(4102444800)
+	windowSec := 604800
+	data := codexUsageResponse{RateLimit: &codexRateLimit{
+		PrimaryWindow: &codexWindow{UsedPercent: &pct, ResetAt: &resetAt, LimitWindowSeconds: &windowSec},
+	}}
+	state := buildCodexState(data)
+	if state.FiveHourWindow != 7*24*time.Hour {
+		t.Fatalf("FiveHourWindow = %v, want 168h", state.FiveHourWindow)
+	}
+	if state.SevenDay != nil || !strings.Contains(buildTooltip(state, ProviderCodex), "7d: 11%") {
+		t.Fatalf("tooltip should label primary as 7d: %q", buildTooltip(state, ProviderCodex))
+	}
+}
+
+func TestBucketLabels_AreBounded(t *testing.T) {
+	long := strings.Repeat("x", 100)
+	var claude usageResponse
+	if err := json.Unmarshal([]byte(`{"limits":[{"kind":"weekly_scoped","percent":1,"scope":{"model":{"display_name":"`+long+`"}}}]}`), &claude); err != nil {
+		t.Fatal(err)
+	}
+	if got := buildClaudeState(claude).SevenDaySonnetLabel; len([]rune(got)) > maxLabelRunes+len(" 7d") {
+		t.Fatalf("claude label not bounded: %d runes", len([]rune(got)))
+	}
+	pct := 1.0
+	codex := codexUsageResponse{AdditionalLimits: []codexNamedRateInfo{{Title: long, Window: &codexWindow{UsedPercent: &pct}}}}
+	if got := buildCodexState(codex).SevenDaySonnetLabel; len([]rune(got)) > maxLabelRunes {
+		t.Fatalf("codex label not bounded: %d runes", len([]rune(got)))
 	}
 }
