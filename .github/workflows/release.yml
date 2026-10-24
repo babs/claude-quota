@@ -24,7 +24,7 @@ jobs:
         with:
           # Same as test.yml, so released binaries are built with the toolchain
           # CI tested against — and with the latest Go security fixes, which
-          # pinning to go.mod's minimum (1.24.0) would forfeit.
+          # pinning to go.mod's minimum (1.26.0) would forfeit.
           go-version: "stable"
       - name: Build
         run: ./release.sh

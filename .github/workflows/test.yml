@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          # Latest patched stable, deliberately not go.mod's 1.24.0: that
+          # Latest patched stable, deliberately not go.mod's 1.26.0: that
           # directive is the minimum language version, and building on it would
           # miss every toolchain security fix since. A new Go turning this red
           # is the point — better here than at release time.
@@ -40,7 +40,7 @@ jobs:
         # release cannot turn CI red on unchanged code.
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13
+          version: v2.14
       # Installed explicitly rather than relying on the runner image: shellcheck
       # happens to be preinstalled on GitHub's ubuntu-latest, but that is not a
       # contract, and it is absent from the act images used for local dry runs.

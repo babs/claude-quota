@@ -145,7 +145,7 @@ curl -fsSL \
 
 ## Build from source
 
-Requires Go 1.24+.
+Requires Go 1.26+.
 
 ```bash
 go build -o claude-quota .
